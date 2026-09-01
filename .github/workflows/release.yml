@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ env.VERSION }}
+          fetch-depth: 0
 
       - uses: actions/setup-go@v6
         with:
@@ -77,11 +78,40 @@ jobs:
           build windows amd64 .exe zip
           (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
 
+      - name: Generate release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          previous_tag="$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || true)"
+
+          arguments=("repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f "tag_name=${VERSION}")
+          if [[ -n "$previous_tag" ]]; then
+            arguments+=(-f "previous_tag_name=${previous_tag}")
+          fi
+          gh api --method POST "${arguments[@]}" --jq .body > release-notes.md
+
+          if grep -Eq '/pull/[0-9]+' release-notes.md; then
+            exit 0
+          fi
+
+          {
+            echo "## Commits"
+            if [[ -n "$previous_tag" ]]; then
+              git log --format='- %s ([%h](https://github.com/'"${GITHUB_REPOSITORY}"'/commit/%H))' "${previous_tag}..${VERSION}"
+              echo
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${VERSION}"
+            else
+              git log --format='- %s ([%h](https://github.com/'"${GITHUB_REPOSITORY}"'/commit/%H))' "${VERSION}"
+            fi
+          } > release-notes.md
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             dist/*.tar.gz
             dist/*.zip

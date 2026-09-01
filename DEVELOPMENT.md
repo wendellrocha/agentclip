@@ -82,4 +82,5 @@ git push origin vX.Y.Z
 As notas de release são geradas pelo GitHub a partir dos pull requests. Labels
 como `feature`, `bug`, `security`, `documentation`, `dependencies` e
 `breaking-change` determinam as categorias. Use `ignore-for-release` ou
-`skip-changelog` para omitir um PR.
+`skip-changelog` para omitir um PR. Sem PRs entre a tag anterior e a atual, o
+workflow publica os commits desse intervalo como notas de release.
