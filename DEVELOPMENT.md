@@ -4,7 +4,8 @@
 
 - Go 1.27 ou superior;
 - SSH para um servidor de teste, caso queira validar o fluxo completo;
-- Codex instalado no servidor para o pareamento automático.
+- Ao menos um harness suportado instalado no servidor: Codex, Claude Code ou
+  Gemini CLI.
 
 ## Build e testes
 
@@ -15,6 +16,10 @@ go vet ./...
 ```
 
 O binário local `./agentclip` e a pasta `plans/` são ignorados pelo Git.
+
+A versão de desenvolvimento vive em `internal/buildinfo/buildinfo.go`. As
+releases usam a tag `vX.Y.Z` para sobrescrevê-la no binário e nos metadados MCP;
+para iniciar o próximo ciclo, altere apenas esse arquivo.
 
 ## Fluxo de desenvolvimento
 
@@ -33,6 +38,19 @@ ssh bastion-m2 'agentclip version'
 `pair` mantém esse fluxo avançado. `setup` é o caminho recomendado para uma
 release publicada; ele não tenta baixar uma versão de desenvolvimento sem que
 `--version vX.Y.Z` seja informado.
+
+`pair`, `setup` e `connect` detectam e configuram todos os harnesses suportados
+instalados no servidor. Para limitar a um harness ou remover exclusivamente a
+entrada MCP do AgentClip, use:
+
+```bash
+./agentclip connect m2 --agent claude
+./agentclip connect m2 --agent gemini
+./agentclip uninstall m2 --agent gemini
+```
+
+`disconnect` é mantido como alias compatível de `uninstall`. Nenhum dos dois
+remove o binário ou desinstala o harness remoto.
 
 ## Validar arquivos e CSV
 
@@ -57,8 +75,8 @@ publica binários para Linux `amd64`/`arm64`, macOS `amd64`/`arm64` e Windows
 `amd64`, além de checksums e instaladores.
 
 ```bash
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
 As notas de release são geradas pelo GitHub a partir dos pull requests. Labels

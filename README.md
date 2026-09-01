@@ -34,8 +34,9 @@ Instale e configure o servidor em uma única chamada:
 agentclip setup bastion-m2 --profile m2
 ```
 
-O comando instala a versão compatível no servidor Linux/macOS via SSH,
-configura o MCP do Codex, cria o perfil local e inicia o Companion. Em seguida:
+O comando instala a versão compatível no servidor Linux/macOS via SSH, detecta
+Codex, Claude Code e Gemini CLI instalados no servidor, configura o MCP em cada
+um deles, cria o perfil local e inicia o Companion. Em seguida:
 
 ```bash
 ssh bastion-m2
@@ -46,6 +47,45 @@ No agente, peça por exemplo: `Analise o arquivo CSV que está no meu clipboard.
 
 O Companion acompanha imagens, texto e arquivos copiados do gerenciador de
 arquivos. O conteúdo só deixa o host quando uma ferramenta MCP é chamada.
+
+Por padrão, `setup`, `pair` e `connect` usam todos os harnesses suportados que
+encontrarem. Use `--agent` para limitar a configuração a um deles. Para remover
+apenas o MCP do AgentClip de um harness, use `uninstall`; o CLI/harness e o
+perfil local continuam intactos:
+
+```bash
+agentclip setup bastion-m2 --profile m2 --agent claude
+agentclip connect m2
+agentclip uninstall m2 --agent gemini
+```
+
+## Compatibilidade de agentes
+
+AgentClip integra-se ao **harness** — o programa que executa o agente e chama
+ferramentas MCP —, não ao modelo escolhido dentro dele. A tabela separa o que
+a versão atual configura automaticamente do que ainda é planejamento.
+
+| Harness | Status | Integração |
+| --- | --- | --- |
+| Codex | Suportado | Detectado e configurado automaticamente quando instalado |
+| Claude Code | Implementado — E2E pendente | Detectado e configurado automaticamente quando instalado |
+| Gemini CLI | Implementado — E2E pendente | Detectado e configurado automaticamente quando instalado |
+| AGY / Antigravity CLI | Planejado | MCP `stdio`; configuração JSON de usuário |
+| OpenCode | Planejado | MCP `stdio`; configuração JSON compatível por versão |
+| Pi Coding Agent | Planejado | Requer extensão AgentClip explícita |
+| Outro cliente MCP | Manual | Configure `agentclip mcp` e as variáveis do perfil manualmente |
+
+| Modelo ou provedor | Status direto | Como usar |
+| --- | --- | --- |
+| DeepSeek | Não aplicável | Use por meio de um harness compatível, como Pi ou OpenCode |
+| MiMo | Não aplicável | Use por meio de um harness MCP; não há um adaptador de modelo direto |
+
+Os adaptadores planejados nunca instalarão clientes de terceiros sem ação
+explícita do usuário, nem gravarão o token do AgentClip em configurações de
+projeto versionáveis.
+
+Antes de uma nova release, cada adaptador precisa validar imagem, texto e CSV
+em um servidor remoto com o respectivo CLI instalado.
 
 ## Segurança e limites
 
@@ -70,8 +110,8 @@ arquivos. O conteúdo só deixa o host quando uma ferramenta MCP é chamada.
 O MVP inclui snapshots de imagem, texto e arquivos regulares, bridge local
 autenticado, sessão SSH reversa persistente, perfil pareado, dashboard do
 Companion e ferramentas MCP para status, imagem, texto e materialização de
-arquivos. Adaptadores automáticos para Claude Code e OpenCode ainda não fazem
-parte desta etapa.
+arquivos. Os adaptadores automáticos atuais são Codex, Claude Code e Gemini
+CLI; AGY, OpenCode e Pi continuam planejados.
 
 ## Licença
 

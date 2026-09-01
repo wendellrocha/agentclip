@@ -58,7 +58,7 @@ jobs:
             mkdir -p "$directory"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build \
               -trimpath \
-              -ldflags="-s -w -X main.version=${VERSION}" \
+              -ldflags="-s -w -X github.com/wendellrocha/agentclip/internal/buildinfo.Version=${VERSION}" \
               -o "${directory}/agentclip${extension}" \
               ./cmd/agentclip
             cp README.md "$directory/"

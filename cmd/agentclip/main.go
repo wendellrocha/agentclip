@@ -28,6 +28,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/wendellrocha/agentclip/internal/bridge"
+	"github.com/wendellrocha/agentclip/internal/buildinfo"
 	"github.com/wendellrocha/agentclip/internal/clipboard"
 	"github.com/wendellrocha/agentclip/internal/companion"
 	"github.com/wendellrocha/agentclip/internal/daemon"
@@ -36,7 +37,6 @@ import (
 )
 
 const (
-	version           = "0.1.0-dev"
 	clipboardTimeout  = 5 * time.Second
 	startupTimeout    = 3 * time.Second
 	remotePortMin     = 32000
@@ -76,6 +76,10 @@ func main() {
 		err = runPair(os.Args[2:])
 	case "setup":
 		err = runSetup(os.Args[2:])
+	case "connect":
+		err = runConnect(os.Args[2:])
+	case "disconnect", "uninstall":
+		err = runUninstall(os.Args[2:])
 	case "companion":
 		err = runCompanion(os.Args[2:])
 	case "mcp":
@@ -85,7 +89,7 @@ func main() {
 	case "doctor":
 		err = runDoctor()
 	case "version", "--version", "-v":
-		fmt.Println(version)
+		fmt.Println(buildinfo.Version)
 		return
 	default:
 		usage()
@@ -200,16 +204,18 @@ func runMCP() error {
 
 func runPair(arguments []string) error {
 	if len(arguments) < 2 {
-		return errors.New("usage: agentclip pair <profile> <ssh-destination> [--remote-port 39123] [--skip-codex]")
+		return errors.New("usage: agentclip pair <profile> <ssh-destination> [--agent all|codex|claude|gemini] [--remote-port 39123] [--skip-agent]")
 	}
 	settings := flag.NewFlagSet("pair", flag.ContinueOnError)
 	settings.SetOutput(io.Discard)
 	remotePort := settings.Int("remote-port", 39123, "remote loopback port")
-	skipCodex := settings.Bool("skip-codex", false, "do not configure Codex on the server")
+	agent := settings.String("agent", "all", "remote agent: all, codex, claude, or gemini")
+	skipAgent := settings.Bool("skip-agent", false, "do not configure an agent on the server")
+	skipCodex := settings.Bool("skip-codex", false, "deprecated alias for --skip-agent")
 	if err := settings.Parse(arguments[2:]); err != nil {
 		return fmt.Errorf("parse pair options: %w", err)
 	}
-	profile, err := pairProfile(arguments[0], arguments[1], *remotePort, *skipCodex)
+	profile, err := pairProfile(arguments[0], arguments[1], *remotePort, *agent, *skipAgent || *skipCodex)
 	if err != nil {
 		return err
 	}
@@ -219,7 +225,7 @@ func runPair(arguments []string) error {
 
 func runSetup(arguments []string) error {
 	if len(arguments) < 1 {
-		return errors.New("usage: agentclip setup <ssh-destination> [--profile NAME] [--version vX.Y.Z] [--remote-port 39123] [--skip-codex] [--skip-install] [--no-start]")
+		return errors.New("usage: agentclip setup <ssh-destination> [--profile NAME] [--agent all|codex|claude|gemini] [--version vX.Y.Z] [--remote-port 39123] [--skip-agent] [--skip-install] [--no-start]")
 	}
 	if strings.HasPrefix(arguments[0], "-") {
 		return errors.New("SSH destination must not start with a dash")
@@ -227,9 +233,11 @@ func runSetup(arguments []string) error {
 	settings := flag.NewFlagSet("setup", flag.ContinueOnError)
 	settings.SetOutput(io.Discard)
 	profileName := settings.String("profile", "", "local Companion profile name")
+	agent := settings.String("agent", "all", "remote agent: all, codex, claude, or gemini")
 	releaseVersion := settings.String("version", "", "AgentClip release tag to install remotely")
 	remotePort := settings.Int("remote-port", 39123, "remote loopback port")
-	skipCodex := settings.Bool("skip-codex", false, "do not configure Codex on the server")
+	skipAgent := settings.Bool("skip-agent", false, "do not configure an agent on the server")
+	skipCodex := settings.Bool("skip-codex", false, "deprecated alias for --skip-agent")
 	skipInstall := settings.Bool("skip-install", false, "do not install AgentClip on the server")
 	noStart := settings.Bool("no-start", false, "do not start the local Companion")
 	if err := settings.Parse(arguments[1:]); err != nil {
@@ -260,7 +268,7 @@ func runSetup(arguments []string) error {
 			return err
 		}
 	}
-	profile, err := pairProfile(name, arguments[0], *remotePort, *skipCodex)
+	profile, err := pairProfile(name, arguments[0], *remotePort, *agent, *skipAgent || *skipCodex)
 	if err != nil {
 		return err
 	}
@@ -275,7 +283,60 @@ func runSetup(arguments []string) error {
 	return nil
 }
 
-func pairProfile(name, destination string, remotePort int, skipCodex bool) (companion.Profile, error) {
+func runConnect(arguments []string) error {
+	if len(arguments) < 1 {
+		return errors.New("usage: agentclip connect <profile> [--agent all|codex|claude|gemini]")
+	}
+	settings := flag.NewFlagSet("connect", flag.ContinueOnError)
+	settings.SetOutput(io.Discard)
+	agent := settings.String("agent", "all", "remote agent: all, codex, claude, or gemini")
+	if err := settings.Parse(arguments[1:]); err != nil {
+		return fmt.Errorf("parse connect options: %w", err)
+	}
+	if settings.NArg() != 0 {
+		return errors.New("usage: agentclip connect <profile> [--agent all|codex|claude|gemini]")
+	}
+	profile, err := companion.LoadProfile(arguments[0])
+	if err != nil {
+		return err
+	}
+	adapters, err := configureRemoteAgents(profile, *agent)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Connected %s to profile %q.\n", displayAgents(adapters), profile.Name)
+	return nil
+}
+
+func runUninstall(arguments []string) error {
+	if len(arguments) < 1 {
+		return errors.New("usage: agentclip uninstall <profile> --agent <codex|claude|gemini>")
+	}
+	settings := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	settings.SetOutput(io.Discard)
+	agent := settings.String("agent", "", "remote agent: codex, claude, or gemini")
+	if err := settings.Parse(arguments[1:]); err != nil {
+		return fmt.Errorf("parse uninstall options: %w", err)
+	}
+	if *agent == "" || settings.NArg() != 0 {
+		return errors.New("usage: agentclip uninstall <profile> --agent <codex|claude|gemini>")
+	}
+	profile, err := companion.LoadProfile(arguments[0])
+	if err != nil {
+		return err
+	}
+	adapter, err := resolveAgentAdapter(*agent)
+	if err != nil {
+		return err
+	}
+	if err := remoteLoginCommand(profile.Destination, adapter.removeArguments("agentclip-"+profile.Name)...).Run(); err != nil {
+		return fmt.Errorf("remove AgentClip MCP from %s on %s: %w", adapter.displayName, profile.Destination, err)
+	}
+	fmt.Printf("Removed the AgentClip MCP entry from %s for profile %q. The harness remains installed.\n", adapter.displayName, profile.Name)
+	return nil
+}
+
+func pairProfile(name, destination string, remotePort int, agent string, skipAgent bool) (companion.Profile, error) {
 	token, err := randomToken(32)
 	if err != nil {
 		return companion.Profile{}, err
@@ -287,10 +348,12 @@ func pairProfile(name, destination string, remotePort int, skipCodex bool) (comp
 	if err := profile.Validate(); err != nil {
 		return companion.Profile{}, err
 	}
-	if !skipCodex {
-		if err := configureRemoteCodex(profile); err != nil {
+	if !skipAgent {
+		adapters, err := configureRemoteAgents(profile, agent)
+		if err != nil {
 			return companion.Profile{}, err
 		}
+		fmt.Printf("Configured %s on %s.\n", displayAgents(adapters), profile.Destination)
 	}
 	if err := companion.SaveProfile(profile); err != nil {
 		return companion.Profile{}, err
@@ -301,7 +364,7 @@ func pairProfile(name, destination string, remotePort int, skipCodex bool) (comp
 func releaseTag(requested string) (string, error) {
 	tag := strings.TrimSpace(requested)
 	if tag == "" {
-		tag = version
+		tag = buildinfo.Version
 	}
 	if !strings.HasPrefix(tag, "v") {
 		tag = "v" + tag
@@ -340,35 +403,137 @@ func defaultProfileName(destination string) string {
 	return name
 }
 
-func configureRemoteCodex(profile companion.Profile) error {
+type agentAdapter struct {
+	id              string
+	displayName     string
+	executable      string
+	addArguments    func(companion.Profile, string) []string
+	removeArguments func(string) []string
+}
+
+func configureRemoteAgents(profile companion.Profile, selection string) ([]agentAdapter, error) {
 	if strings.HasPrefix(profile.Destination, "-") {
-		return errors.New("SSH destination must not start with a dash")
+		return nil, errors.New("SSH destination must not start with a dash")
 	}
-	preflight := remotePreflightCommand(profile.Destination)
-	if err := preflight.Run(); err != nil {
-		return fmt.Errorf("remote preflight failed: install `agentclip` and `codex` on %s, or retry with --skip-codex: %w", profile.Destination, err)
+	if strings.EqualFold(strings.TrimSpace(selection), "all") {
+		return configureAllRemoteAgents(profile)
 	}
+	adapter, err := resolveAgentAdapter(selection)
+	if err != nil {
+		return nil, err
+	}
+	if err := remotePreflightCommand(profile.Destination, adapter.executable).Run(); err != nil {
+		return nil, fmt.Errorf("remote preflight failed: install `agentclip` and `%s` on %s, or retry with --skip-agent: %w", adapter.executable, profile.Destination, err)
+	}
+	if err := configureRemoteAdapter(profile, adapter); err != nil {
+		return nil, err
+	}
+	return []agentAdapter{adapter}, nil
+}
+
+func configureAllRemoteAgents(profile companion.Profile) ([]agentAdapter, error) {
+	output, err := remoteSupportedAgentsCommand(profile.Destination).Output()
+	if err != nil {
+		return nil, fmt.Errorf("remote preflight failed: install `agentclip` on %s, or retry with --skip-agent: %w", profile.Destination, err)
+	}
+	var configured []agentAdapter
+	for _, agentID := range strings.Fields(string(output)) {
+		adapter, err := resolveAgentAdapter(agentID)
+		if err != nil {
+			return nil, fmt.Errorf("read supported harnesses on %s: %w", profile.Destination, err)
+		}
+		if err := configureRemoteAdapter(profile, adapter); err != nil {
+			return nil, err
+		}
+		configured = append(configured, adapter)
+	}
+	if len(configured) == 0 {
+		return nil, fmt.Errorf("no supported harness is installed on %s; supported harnesses: codex, claude, gemini", profile.Destination)
+	}
+	return configured, nil
+}
+
+func configureRemoteAdapter(profile companion.Profile, adapter agentAdapter) error {
 	name := "agentclip-" + profile.Name
 	// Re-pairing deliberately replaces only AgentClip's own named MCP entry.
-	_ = remoteLoginCommand(profile.Destination, "codex", "mcp", "remove", name).Run()
-	configure := remoteLoginCommand(profile.Destination,
-		"codex", "mcp", "add", name,
-		"--env", fmt.Sprintf("AGENTCLIP_BRIDGE_PORT=%d", profile.RemotePort),
-		"--env", "AGENTCLIP_SESSION_TOKEN="+profile.Token,
-		"--", "agentclip", "mcp",
-	)
-	if err := configure.Run(); err != nil {
-		return fmt.Errorf("configure Codex MCP on %s: %w", profile.Destination, err)
+	_ = remoteLoginCommand(profile.Destination, adapter.removeArguments(name)...).Run()
+	if err := remoteLoginCommand(profile.Destination, adapter.addArguments(profile, name)...).Run(); err != nil {
+		return fmt.Errorf("configure %s MCP on %s: %w", adapter.displayName, profile.Destination, err)
 	}
 	return nil
 }
 
-func remotePreflightCommand(destination string) *exec.Cmd {
+func resolveAgentAdapter(agentID string) (agentAdapter, error) {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "codex":
+		return agentAdapter{
+			id: "codex", displayName: "Codex", executable: "codex",
+			removeArguments: func(name string) []string {
+				return []string{"codex", "mcp", "remove", name}
+			},
+			addArguments: func(profile companion.Profile, name string) []string {
+				return append(agentEnvironmentArguments([]string{"codex", "mcp", "add", name}, profile), "--", "agentclip", "mcp")
+			},
+		}, nil
+	case "claude", "claude-code":
+		return agentAdapter{
+			id: "claude", displayName: "Claude Code", executable: "claude",
+			removeArguments: func(name string) []string {
+				return []string{"claude", "mcp", "remove", "--scope", "user", name}
+			},
+			addArguments: func(profile companion.Profile, name string) []string {
+				arguments := []string{"claude", "mcp", "add", name, "--scope", "user"}
+				return append(agentEnvironmentArguments(arguments, profile), "--", "agentclip", "mcp")
+			},
+		}, nil
+	case "gemini", "gemini-cli":
+		return agentAdapter{
+			id: "gemini", displayName: "Gemini CLI", executable: "gemini",
+			removeArguments: func(name string) []string {
+				return []string{"gemini", "mcp", "remove", "--scope", "user", name}
+			},
+			addArguments: func(profile companion.Profile, name string) []string {
+				arguments := []string{"gemini", "mcp", "add", name, "agentclip", "mcp", "--scope", "user"}
+				return append(arguments, "--env", fmt.Sprintf("AGENTCLIP_BRIDGE_PORT=%d", profile.RemotePort), "--env", "AGENTCLIP_SESSION_TOKEN="+profile.Token)
+			},
+		}, nil
+	default:
+		return agentAdapter{}, fmt.Errorf("unsupported agent %q; supported agents: codex, claude, gemini", agentID)
+	}
+}
+
+func agentEnvironmentArguments(arguments []string, profile companion.Profile) []string {
+	return append(arguments,
+		"--env", fmt.Sprintf("AGENTCLIP_BRIDGE_PORT=%d", profile.RemotePort),
+		"--env", "AGENTCLIP_SESSION_TOKEN="+profile.Token,
+	)
+}
+
+func displayAgents(adapters []agentAdapter) string {
+	names := make([]string, len(adapters))
+	for index, adapter := range adapters {
+		names[index] = adapter.displayName
+	}
+	return strings.Join(names, ", ")
+}
+
+func remotePreflightCommand(destination, agentExecutable string) *exec.Cmd {
 	// ssh combines all arguments after the destination into a remote shell
 	// command. Use a login shell as well: remote AgentClip and Codex are often
 	// installed through ~/.profile or Volta, neither of which a plain SSH
 	// command is required to load.
-	return exec.Command("ssh", destination, "sh -lc 'export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null && command -v codex >/dev/null'")
+	check := "export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null && command -v " + shellQuote(agentExecutable) + " >/dev/null"
+	return exec.Command("ssh", destination, "sh -lc "+shellQuote(check))
+}
+
+func remoteSupportedAgentsCommand(destination string) *exec.Cmd {
+	// This deliberately detects only built-in adapters. It neither installs
+	// harnesses nor scans project-level configuration files.
+	return exec.Command("ssh", destination, "sh -lc "+shellQuote(remoteSupportedAgentsScript()))
+}
+
+func remoteSupportedAgentsScript() string {
+	return "export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null || exit 10; for agentclip_harness in codex claude gemini; do command -v \"$agentclip_harness\" >/dev/null && printf '%s\\n' \"$agentclip_harness\"; done; true"
 }
 
 func remoteLoginCommand(destination string, arguments ...string) *exec.Cmd {
@@ -833,5 +998,5 @@ func randomPort() (int, error) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: agentclip <command>")
-	fmt.Fprintln(os.Stderr, "commands: arm, ssh, pair, setup, companion, mcp, doctor, version")
+	fmt.Fprintln(os.Stderr, "commands: arm, ssh, pair, setup, connect, uninstall, companion, mcp, doctor, version")
 }

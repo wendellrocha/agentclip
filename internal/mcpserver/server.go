@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/wendellrocha/agentclip/internal/buildinfo"
 )
 
 // ClipboardProvider is the bridge-facing interface used by the MCP server.
@@ -75,7 +76,7 @@ var ErrNoProvider = errors.New("image provider is nil")
 
 // New constructs an MCP server with clipboard_status and get_clipboard_image.
 func New(provider ClipboardProvider) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "agentclip", Version: "0.1.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "agentclip", Version: buildinfo.Version}, nil)
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "clipboard_status", Description: "Lists clipboard items available after the user's explicit request. It returns metadata only, never clipboard bytes or host paths.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {

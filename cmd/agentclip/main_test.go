@@ -3,15 +3,35 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/wendellrocha/agentclip/internal/companion"
 )
 
 func TestRemotePreflightPassesTheWholeCheckAsOneRemoteCommand(t *testing.T) {
-	command := remotePreflightCommand("bastion-m2")
+	command := remotePreflightCommand("bastion-m2", "codex")
 	if len(command.Args) != 3 {
 		t.Fatalf("ssh arguments = %#v; expected destination plus one remote command", command.Args)
 	}
-	if command.Args[2] != "sh -lc 'export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null && command -v codex >/dev/null'" {
+	if !strings.HasPrefix(command.Args[2], "sh -lc '") || !strings.Contains(command.Args[2], "command -v agentclip") || !strings.Contains(command.Args[2], "codex") {
 		t.Fatalf("remote command = %q", command.Args[2])
+	}
+}
+
+func TestRemoteSupportedAgentsChecksOnlyBuiltInHarnesses(t *testing.T) {
+	command := remoteSupportedAgentsCommand("bastion-m2")
+	if len(command.Args) != 3 {
+		t.Fatalf("ssh arguments = %#v; expected destination plus one remote command", command.Args)
+	}
+	for _, required := range []string{"command -v agentclip", "codex", "claude", "gemini", "agentclip_harness"} {
+		if !strings.Contains(command.Args[2], required) {
+			t.Fatalf("remote command = %q; missing %q", command.Args[2], required)
+		}
+	}
+}
+
+func TestRemoteSupportedAgentsScriptSucceedsWhenSomeHarnessesAreAbsent(t *testing.T) {
+	if !strings.HasSuffix(remoteSupportedAgentsScript(), "; true") {
+		t.Fatalf("detection script must not return a missing harness status: %q", remoteSupportedAgentsScript())
 	}
 }
 
@@ -79,6 +99,81 @@ func TestDefaultProfileName(t *testing.T) {
 	for destination, want := range tests {
 		if got := defaultProfileName(destination); got != want {
 			t.Errorf("defaultProfileName(%q) = %q, want %q", destination, got, want)
+		}
+	}
+}
+
+func TestAgentAdaptersBuildUserScopedMCPCommands(t *testing.T) {
+	profile := companion.Profile{Name: "m2", RemotePort: 39123, Token: "pair-token"}
+	tests := []struct {
+		id             string
+		executable     string
+		addContains    []string
+		removeContains []string
+	}{
+		{
+			id: "codex", executable: "codex",
+			addContains:    []string{"codex", "mcp", "add", "agentclip-m2", "--", "agentclip", "mcp", "AGENTCLIP_BRIDGE_PORT=39123", "AGENTCLIP_SESSION_TOKEN=pair-token"},
+			removeContains: []string{"codex", "mcp", "remove", "agentclip-m2"},
+		},
+		{
+			id: "claude", executable: "claude",
+			addContains:    []string{"claude", "mcp", "add", "agentclip-m2", "--scope", "user", "--", "agentclip", "mcp", "AGENTCLIP_BRIDGE_PORT=39123", "AGENTCLIP_SESSION_TOKEN=pair-token"},
+			removeContains: []string{"claude", "mcp", "remove", "--scope", "user", "agentclip-m2"},
+		},
+		{
+			id: "gemini", executable: "gemini",
+			addContains:    []string{"gemini", "mcp", "add", "agentclip-m2", "agentclip", "mcp", "--scope", "user", "AGENTCLIP_BRIDGE_PORT=39123", "AGENTCLIP_SESSION_TOKEN=pair-token"},
+			removeContains: []string{"gemini", "mcp", "remove", "--scope", "user", "agentclip-m2"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.id, func(t *testing.T) {
+			adapter, err := resolveAgentAdapter(test.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if adapter.executable != test.executable {
+				t.Fatalf("executable = %q, want %q", adapter.executable, test.executable)
+			}
+			assertArgumentsContain(t, adapter.addArguments(profile, "agentclip-m2"), test.addContains)
+			assertArgumentsContain(t, adapter.removeArguments("agentclip-m2"), test.removeContains)
+		})
+	}
+}
+
+func TestResolveAgentAdapterRejectsUnknownAgent(t *testing.T) {
+	if _, err := resolveAgentAdapter("opencode"); err == nil {
+		t.Fatal("expected unsupported agent error")
+	}
+}
+
+func TestDisplayAgents(t *testing.T) {
+	codex, err := resolveAgentAdapter("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gemini, err := resolveAgentAdapter("gemini")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := displayAgents([]agentAdapter{codex, gemini}), "Codex, Gemini CLI"; got != want {
+		t.Fatalf("displayAgents() = %q, want %q", got, want)
+	}
+}
+
+func assertArgumentsContain(t *testing.T, arguments, required []string) {
+	t.Helper()
+	for _, value := range required {
+		found := false
+		for _, argument := range arguments {
+			if argument == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("arguments %q do not contain %q", arguments, value)
 		}
 	}
 }
