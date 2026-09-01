@@ -6,10 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"mime"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wendellrocha/agentclip/internal/bridge"
@@ -39,8 +43,9 @@ type snapshotItemRequest struct {
 	File     *bridge.FileRef `json:"file,omitempty"`
 }
 type persistentSessionRequest struct {
-	ID    string `json:"id"`
-	Token string `json:"token"`
+	ID          string `json:"id"`
+	Token       string `json:"token"`
+	UploadToken string `json:"upload_token,omitempty"`
 }
 
 type State struct {
@@ -80,13 +85,15 @@ func Start(initial *Image, controlToken string) (*Daemon, error) {
 	mux.HandleFunc("/v1/control/snapshot", d.snapshot)
 	mux.HandleFunc("/v1/control/sessions", d.session)
 	mux.HandleFunc("/v1/control/persistent-session", d.persistentSession)
+	mux.HandleFunc("/v1/control/inbound", d.inbound)
+	mux.HandleFunc("/v1/control/inbound/", d.inboundAction)
 	mux.HandleFunc("/v1/control/shutdown", d.shutdown)
 	mux.Handle("/", b.Handler())
 	d.server = &http.Server{
 		Handler:           noStore(authControl(controlToken, mux)),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       5 * time.Second,
-		WriteTimeout:      5 * time.Second,
+		ReadTimeout:       bridge.InboundTransferTimeout,
+		WriteTimeout:      bridge.InboundTransferTimeout,
 	}
 	if err := saveState(d.State); err != nil {
 		l.Close()
@@ -196,11 +203,66 @@ func (d *Daemon) persistentSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	if err := d.Bridge.RegisterPersistentSession(request.ID, request.Token); err != nil {
+	if err := d.Bridge.RegisterPersistentSessionWithUpload(request.ID, request.Token, request.UploadToken); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]bool{"registered": true})
+}
+
+func (d *Daemon) inbound(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, d.Bridge.InboundLocalStatus())
+}
+
+func (d *Daemon) inboundAction(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/control/inbound/"), "/")
+	if len(parts) != 2 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodGet && parts[1] == "file" {
+		file, offer, err := d.Bridge.OpenInboundFile(parts[0])
+		if err != nil {
+			http.Error(w, "received file is unavailable", http.StatusNotFound)
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": offer.Name}))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", offer.Size))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if bridge.InboundTextPreviewable(offer.Name) {
+			w.Header().Set("X-AgentClip-Previewable", "true")
+		}
+		_, _ = io.Copy(w, io.LimitReader(file, offer.Size))
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var (
+		offer any
+		err   error
+	)
+	switch parts[1] {
+	case "accept":
+		offer, err = d.Bridge.AcceptInboundOffer(parts[0])
+	case "reject":
+		offer, err = d.Bridge.RejectInboundOffer(parts[0])
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, offer)
 }
 func (d *Daemon) shutdown(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -212,7 +274,7 @@ func (d *Daemon) shutdown(w http.ResponseWriter, r *http.Request) {
 }
 func authControl(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/control/arm" || r.URL.Path == "/v1/control/snapshot" || r.URL.Path == "/v1/control/sessions" || r.URL.Path == "/v1/control/persistent-session" || r.URL.Path == "/v1/control/shutdown" {
+		if strings.HasPrefix(r.URL.Path, "/v1/control/") {
 			if r.Header.Get("Authorization") != "Bearer "+token {
 				http.Error(w, "unauthorized", 401)
 				return

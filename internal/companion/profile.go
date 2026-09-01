@@ -19,8 +19,11 @@ type Profile struct {
 	Destination string    `json:"destination"`
 	RemotePort  int       `json:"remote_port"`
 	Token       string    `json:"token"`
+	UploadToken string    `json:"upload_token,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
+
+func (p Profile) HasUploadToken() bool { return strings.TrimSpace(p.UploadToken) != "" }
 
 func (p Profile) Validate() error {
 	if !validProfileName(p.Name) {

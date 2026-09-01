@@ -16,35 +16,155 @@ import (
 )
 
 const (
-	inboxRetention  = 30 * time.Minute
-	fileTransferTTL = 2 * time.Minute
+	inboxRetention          = 30 * time.Minute
+	fileTransferTTL         = 2 * time.Minute
+	hostApprovalWaitTimeout = 10 * time.Minute
+	hostApprovalPollEvery   = 250 * time.Millisecond
 )
 
 // HTTPProvider obtains bridge state through the loopback port exposed by the
 // SSH reverse forward. Its endpoint must be an HTTP URL on 127.0.0.1.
 type HTTPProvider struct {
-	baseURL string
-	token   string
-	client  *http.Client
+	baseURL     string
+	token       string
+	uploadToken string
+	client      *http.Client
 }
 
 // NewHTTPProvider constructs a bridge client. The port is intentionally the
 // only endpoint input accepted by the remote command, preventing requests to
 // arbitrary hosts.
-func NewHTTPProvider(port int, token string) (*HTTPProvider, error) {
+func NewHTTPProvider(port int, token string, uploadTokens ...string) (*HTTPProvider, error) {
 	if port < 1 || port > 65535 {
 		return nil, fmt.Errorf("bridge port must be between 1 and 65535")
 	}
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("bridge session token is required")
 	}
+	uploadToken := ""
+	if len(uploadTokens) > 0 {
+		uploadToken = uploadTokens[0]
+	}
 	provider := &HTTPProvider{
-		baseURL: "http://127.0.0.1:" + strconv.Itoa(port),
-		token:   token,
-		client:  &http.Client{Timeout: 5 * time.Second},
+		baseURL:     "http://127.0.0.1:" + strconv.Itoa(port),
+		token:       token,
+		uploadToken: uploadToken,
+		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 	_ = cleanupExpiredInbox()
 	return provider, nil
+}
+
+// OfferFileToHost submits only verified metadata. The content stays on the
+// remote machine until the local user accepts the offer in the Companion.
+func (p *HTTPProvider) OfferFileToHost(ctx context.Context, path string) (HostFileOffer, error) {
+	metadata, err := remoteFileMetadata(path)
+	if err != nil {
+		return HostFileOffer{}, err
+	}
+	payload, err := json.Marshal(metadata)
+	if err != nil {
+		return HostFileOffer{}, err
+	}
+	response, err := p.uploadRequest(ctx, http.MethodPost, "/v1/inbound/offers", strings.NewReader(string(payload)), int64(len(payload)), p.client)
+	if err != nil {
+		return HostFileOffer{}, err
+	}
+	defer response.Body.Close()
+	if err := responseError(response); err != nil {
+		return HostFileOffer{}, err
+	}
+	var offer HostFileOffer
+	if err := json.NewDecoder(response.Body).Decode(&offer); err != nil {
+		return HostFileOffer{}, fmt.Errorf("decode inbound offer: %w", err)
+	}
+	return offer, nil
+}
+
+func (p *HTTPProvider) HostFileOfferStatus(ctx context.Context, offerID string) (HostFileOffer, error) {
+	if strings.TrimSpace(offerID) == "" {
+		return HostFileOffer{}, fmt.Errorf("offer_id is required")
+	}
+	response, err := p.uploadRequest(ctx, http.MethodGet, "/v1/inbound/offers/"+offerID, nil, 0, p.client)
+	if err != nil {
+		return HostFileOffer{}, err
+	}
+	defer response.Body.Close()
+	if err := responseError(response); err != nil {
+		return HostFileOffer{}, err
+	}
+	var offer HostFileOffer
+	if err := json.NewDecoder(response.Body).Decode(&offer); err != nil {
+		return HostFileOffer{}, fmt.Errorf("decode inbound offer: %w", err)
+	}
+	return offer, nil
+}
+
+// WaitHostFileOffer waits for an explicit local approval, rejection, or
+// expiry. It polls only the authenticated loopback bridge exposed by the
+// existing reverse tunnel; the host never connects directly to the remote MCP
+// process.
+func (p *HTTPProvider) WaitHostFileOffer(ctx context.Context, offerID string) (HostFileOffer, error) {
+	if strings.TrimSpace(offerID) == "" {
+		return HostFileOffer{}, fmt.Errorf("offer_id is required")
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, hostApprovalWaitTimeout)
+	defer cancel()
+	ticker := time.NewTicker(hostApprovalPollEvery)
+	defer ticker.Stop()
+	for {
+		offer, err := p.HostFileOfferStatus(waitCtx, offerID)
+		if err != nil {
+			return HostFileOffer{}, err
+		}
+		if offer.State != "pending" {
+			return offer, nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return HostFileOffer{}, fmt.Errorf("waiting for host approval: %w", waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (p *HTTPProvider) DeliverFileToHost(ctx context.Context, offerID, path string) (HostFileOffer, error) {
+	if strings.TrimSpace(offerID) == "" {
+		return HostFileOffer{}, fmt.Errorf("offer_id is required")
+	}
+	metadata, err := remoteFileMetadata(path)
+	if err != nil {
+		return HostFileOffer{}, err
+	}
+	offer, err := p.HostFileOfferStatus(ctx, offerID)
+	if err != nil {
+		return HostFileOffer{}, err
+	}
+	if offer.State != "accepted" {
+		return HostFileOffer{}, fmt.Errorf("host file offer is %s", offer.State)
+	}
+	if offer.Name != metadata.Name || offer.Size != metadata.Size || !strings.EqualFold(offer.SHA256, metadata.SHA256) {
+		return HostFileOffer{}, fmt.Errorf("remote file changed after it was offered")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return HostFileOffer{}, fmt.Errorf("open remote file: %w", err)
+	}
+	defer file.Close()
+	transferCtx, cancel := context.WithTimeout(ctx, fileTransferTTL)
+	defer cancel()
+	response, err := p.uploadRequest(transferCtx, http.MethodPut, "/v1/inbound/offers/"+offerID+"/content", file, metadata.Size, &http.Client{Timeout: fileTransferTTL})
+	if err != nil {
+		return HostFileOffer{}, err
+	}
+	defer response.Body.Close()
+	if err := responseError(response); err != nil {
+		return HostFileOffer{}, err
+	}
+	if err := json.NewDecoder(response.Body).Decode(&offer); err != nil {
+		return HostFileOffer{}, fmt.Errorf("decode delivered inbound offer: %w", err)
+	}
+	return offer, nil
 }
 
 func (p *HTTPProvider) Status(ctx context.Context) (Status, error) {
@@ -276,6 +396,54 @@ func (p *HTTPProvider) requestWithClient(ctx context.Context, path string, clien
 		return nil, fmt.Errorf("request bridge: %w", err)
 	}
 	return response, nil
+}
+
+func (p *HTTPProvider) uploadRequest(ctx context.Context, method, path string, body io.Reader, length int64, client *http.Client) (*http.Response, error) {
+	if strings.TrimSpace(p.uploadToken) == "" {
+		return nil, fmt.Errorf("host uploads are unavailable for this profile; run agentclip setup again")
+	}
+	request, err := http.NewRequestWithContext(ctx, method, p.baseURL+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("build inbound request: %w", err)
+	}
+	if body != nil {
+		request.ContentLength = length
+	}
+	request.Header.Set("Authorization", "Bearer "+p.uploadToken)
+	if method == http.MethodPost {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("request host inbox: %w", err)
+	}
+	return response, nil
+}
+
+type remoteFileOffer struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+func remoteFileMetadata(path string) (remoteFileOffer, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return remoteFileOffer{}, fmt.Errorf("remote file must be a regular file")
+	}
+	if info.Size() < 0 || info.Size() > 50<<20 {
+		return remoteFileOffer{}, fmt.Errorf("remote file exceeds transfer limits")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return remoteFileOffer{}, fmt.Errorf("open remote file: %w", err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.LimitReader(file, 50<<20+1)); err != nil {
+		return remoteFileOffer{}, fmt.Errorf("hash remote file: %w", err)
+	}
+	return remoteFileOffer{Name: filepath.Base(path), Size: info.Size(), SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
 func responseError(response *http.Response) error {

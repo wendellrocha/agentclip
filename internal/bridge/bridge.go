@@ -112,6 +112,8 @@ type Session struct {
 	ID                   string
 	ImageID              string
 	TokenHash            [32]byte
+	UploadTokenHash      [32]byte
+	HasUploadToken       bool
 	CreatedAt, ExpiresAt time.Time
 	Revoked              bool
 	Persistent           bool
@@ -122,6 +124,7 @@ type Bridge struct {
 	snapshot *Snapshot
 	items    map[string]*armedItem
 	sessions map[string]*Session
+	inbound  map[string]*inboundOffer
 	ttl      time.Duration
 	now      func() time.Time
 }
@@ -130,7 +133,7 @@ func New(ttl time.Duration) *Bridge {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	return &Bridge{items: make(map[string]*armedItem), sessions: make(map[string]*Session), ttl: ttl, now: time.Now}
+	return &Bridge{items: make(map[string]*armedItem), sessions: make(map[string]*Session), inbound: make(map[string]*inboundOffer), ttl: ttl, now: time.Now}
 }
 
 // Arm preserves the image-only local API while creating a generic snapshot.
@@ -283,6 +286,12 @@ func validateFileRef(ref FileRef) (FileRef, error) {
 }
 
 func (b *Bridge) RegisterPersistentSession(id, token string) error {
+	return b.RegisterPersistentSessionWithUpload(id, token, "")
+}
+
+// RegisterPersistentSessionWithUpload grants a Companion profile separate
+// capabilities for reading the clipboard and offering files to the host.
+func (b *Bridge) RegisterPersistentSessionWithUpload(id, token, uploadToken string) error {
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(token) == "" {
 		return errors.New("persistent session ID and token are required")
 	}
@@ -291,7 +300,12 @@ func (b *Bridge) RegisterPersistentSession(id, token string) error {
 	now := b.now()
 	b.pruneSessionsLocked(now)
 	hash := sha256.Sum256([]byte(token))
-	b.sessions[id] = &Session{ID: id, TokenHash: hash, CreatedAt: now, Persistent: true}
+	session := &Session{ID: id, TokenHash: hash, CreatedAt: now, Persistent: true}
+	if strings.TrimSpace(uploadToken) != "" {
+		session.UploadTokenHash = sha256.Sum256([]byte(uploadToken))
+		session.HasUploadToken = true
+	}
+	b.sessions[id] = session
 	return nil
 }
 
@@ -328,6 +342,8 @@ func (b *Bridge) Handler() http.Handler {
 	mux.HandleFunc("/v1/status", b.status)
 	mux.HandleFunc("/v1/image", b.imageHandler)
 	mux.HandleFunc("/v1/items/", b.itemHandler)
+	mux.HandleFunc("/v1/inbound/offers", b.inboundOffersHandler)
+	mux.HandleFunc("/v1/inbound/offers/", b.inboundOfferHandler)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		mux.ServeHTTP(w, r)
@@ -355,6 +371,26 @@ func (b *Bridge) authenticate(r *http.Request) (*Session, string) {
 		hash := sha256.Sum256([]byte(parts[1]))
 		if subtle.ConstantTimeCompare(hash[:], session.TokenHash[:]) == 1 {
 			if session.Revoked || (!session.Persistent && b.now().After(session.ExpiresAt)) {
+				return nil, "INVALID_SESSION"
+			}
+			return session, ""
+		}
+	}
+	return nil, "UNAUTHORIZED"
+}
+
+func (b *Bridge) authenticateUpload(r *http.Request) (*Session, string) {
+	parts := strings.Fields(r.Header.Get("Authorization"))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return nil, "UNAUTHORIZED"
+	}
+	hash := sha256.Sum256([]byte(parts[1]))
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneSessionsLocked(b.now())
+	for _, session := range b.sessions {
+		if session.HasUploadToken && subtle.ConstantTimeCompare(hash[:], session.UploadTokenHash[:]) == 1 {
+			if session.Revoked || !session.Persistent {
 				return nil, "INVALID_SESSION"
 			}
 			return session, ""

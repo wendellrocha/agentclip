@@ -2,10 +2,13 @@ package daemon
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -128,5 +131,54 @@ func TestSnapshotControlArmsLocalFileReference(t *testing.T) {
 	d.Bridge.Handler().ServeHTTP(status, remoteRequest)
 	if status.Code != http.StatusOK || strings.Contains(status.Body.String(), path) || !strings.Contains(status.Body.String(), "fixture.csv") {
 		t.Fatalf("bridge status = %d %s", status.Code, status.Body.String())
+	}
+}
+
+func TestInboundTextContentRequiresControlToken(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	d, err := Start(nil, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.Bridge.RegisterPersistentSessionWithUpload("companion:dev", "read-token", "upload-token"); err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte("a,b\n1,2\n")
+	hash := sha256.Sum256(contents)
+	offer, err := d.Bridge.CreateInboundOffer("companion:dev", "report.csv", int64(len(contents)), hex.EncodeToString(hash[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Bridge.AcceptInboundOffer(offer.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Bridge.DeliverInboundOffer("companion:dev", offer.ID, bytes.NewReader(contents), int64(len(contents))); err != nil {
+		t.Fatal(err)
+	}
+	url := "http://" + d.State.Address + "/v1/control/inbound/" + offer.ID + "/file"
+	response, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized content status = %d", response.StatusCode)
+	}
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer secret")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/octet-stream" || response.Header.Get("X-AgentClip-Previewable") != "true" {
+		t.Fatalf("content status = %d %q", response.StatusCode, response.Header.Get("Content-Type"))
+	}
+	if data, err := io.ReadAll(response.Body); err != nil || !bytes.Equal(data, contents) {
+		t.Fatalf("content = %q, %v", data, err)
 	}
 }

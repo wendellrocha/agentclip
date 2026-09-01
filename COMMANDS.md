@@ -80,7 +80,8 @@ CLI do harness, o binário remoto, o perfil local ou o Companion em execução.
 ### `companion`
 
 ```text
-agentclip companion <start|stop|status|open|view|run> <profile>
+agentclip companion <start|stop|status|open|view|run|inbox> <profile>
+agentclip companion <accept|reject> <profile> <offer-id>
 ```
 
 Gerencia a parte local persistente do AgentClip.
@@ -93,6 +94,10 @@ Gerencia a parte local persistente do AgentClip.
 - `open` ou `view`: abre a página web local do Companion no navegador padrão.
 - `run`: executa o Companion em primeiro plano; use para diagnóstico. `start`
   é preferível no uso normal.
+- `inbox`: mostra o estado do Companion, incluindo arquivos oferecidos pelo
+  servidor e os recebimentos recentes.
+- `accept` e `reject`: aprovam ou recusam uma oferta pendente sem abrir o
+  navegador. O ID aparece em `inbox`, `status` ou na página web.
 
 ### Página web do Companion
 
@@ -110,6 +115,23 @@ A página atualiza a cada dois segundos e mostra:
 Ela é uma visão operacional; não transfere o conteúdo do clipboard ao
 servidor. A transferência acontece apenas quando o harness remoto chama uma
 ferramenta MCP após um pedido explícito do usuário.
+
+Quando um agente remoto oferece um arquivo para o host, esta página mostra a
+seção **Arquivos do servidor**. Ela exibe nome, tamanho e expiração da oferta;
+use **Aceitar** para liberar a entrega ou **Recusar** para cancelá-la. Ao
+aceitar ou recusar, a oferta sai imediatamente da lista e a chamada MCP remota
+que a criou recebe a decisão (ela espera por até 10 minutos). O remoto não
+consegue enviar bytes nem escolher o destino local antes desse aceite. Um
+recebimento validado fica em `~/.cache/agentclip/received/` (ou cache
+equivalente) e é removido automaticamente após 30 minutos.
+
+Arquivos recebidos de texto, código e dados tabulares exibem também **Abrir
+conteúdo**. O botão abre uma nova aba local com o conteúdo bruto como texto
+simples — apropriado para CSV, TSV, SQL, JSON, YAML e fontes. Ele não executa
+HTML e não é exibido para formatos binários, como imagens e planilhas `.xlsx`.
+Todos os arquivos recebidos exibem ainda **Baixar**, que baixa o original pelo
+endereço privado local, e **Copiar caminho**, para copiar sua localização na
+inbox do AgentClip.
 
 ### `doctor`
 

@@ -18,6 +18,10 @@ type ClipboardProvider interface {
 	Image(context.Context) (Image, error)
 	Text(context.Context, string) (Text, error)
 	MaterializeFiles(context.Context, []string) (Materialization, error)
+	OfferFileToHost(context.Context, string) (HostFileOffer, error)
+	HostFileOfferStatus(context.Context, string) (HostFileOffer, error)
+	WaitHostFileOffer(context.Context, string) (HostFileOffer, error)
+	DeliverFileToHost(context.Context, string, string) (HostFileOffer, error)
 }
 
 type Status struct {
@@ -64,12 +68,35 @@ type Materialization struct {
 	Files     []MaterializedFile `json:"files"`
 }
 
+type HostFileOffer struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Size      int64     `json:"size"`
+	SHA256    string    `json:"sha256"`
+	State     string    `json:"state"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 type itemArguments struct {
 	ItemID string `json:"item_id"`
 }
 
 type fileArguments struct {
 	ItemIDs []string `json:"item_ids"`
+}
+
+type remotePathArguments struct {
+	Path string `json:"path"`
+}
+
+type offerArguments struct {
+	OfferID string `json:"offer_id"`
+}
+
+type deliverArguments struct {
+	OfferID string `json:"offer_id"`
+	Path    string `json:"path"`
 }
 
 var ErrNoProvider = errors.New("image provider is nil")
@@ -139,6 +166,49 @@ func New(provider ClipboardProvider) *mcp.Server {
 			return toolError(err)
 		}
 		data, _ := json.Marshal(result)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
+	})
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "offer_file_to_host", Description: "Offers one remote file for delivery to the host after the user explicitly asks, then waits for the local user to accept, reject, or let it expire. It sends metadata only before approval. If accepted, immediately call deliver_file_to_host with the returned offer ID and the same path.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input remotePathArguments) (*mcp.CallToolResult, any, error) {
+		if provider == nil {
+			return toolError(ErrNoProvider)
+		}
+		offer, err := provider.OfferFileToHost(ctx, input.Path)
+		if err != nil {
+			return toolError(err)
+		}
+		offer, err = provider.WaitHostFileOffer(ctx, offer.ID)
+		if err != nil {
+			return toolError(err)
+		}
+		data, _ := json.Marshal(offer)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
+	})
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "host_file_offer_status", Description: "Checks whether the local user accepted, rejected, or expired a pending remote file offer.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input offerArguments) (*mcp.CallToolResult, any, error) {
+		if provider == nil {
+			return toolError(ErrNoProvider)
+		}
+		offer, err := provider.HostFileOfferStatus(ctx, input.OfferID)
+		if err != nil {
+			return toolError(err)
+		}
+		data, _ := json.Marshal(offer)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
+	})
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "deliver_file_to_host", Description: "Streams a remote file to the host only after the local user accepted its matching offer. Never choose a host destination path.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input deliverArguments) (*mcp.CallToolResult, any, error) {
+		if provider == nil {
+			return toolError(ErrNoProvider)
+		}
+		offer, err := provider.DeliverFileToHost(ctx, input.OfferID, input.Path)
+		if err != nil {
+			return toolError(err)
+		}
+		data, _ := json.Marshal(offer)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
 	})
 	return s

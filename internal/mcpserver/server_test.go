@@ -22,6 +22,18 @@ func (fakeProvider) Text(context.Context, string) (Text, error) {
 func (fakeProvider) MaterializeFiles(context.Context, []string) (Materialization, error) {
 	return Materialization{Directory: "/tmp/agentclip", Files: []MaterializedFile{{ItemID: "file", Path: "/tmp/agentclip/file.csv"}}}, nil
 }
+func (fakeProvider) OfferFileToHost(context.Context, string) (HostFileOffer, error) {
+	return HostFileOffer{ID: "offer", Name: "report.csv", Size: 3, SHA256: "hash", State: "pending"}, nil
+}
+func (fakeProvider) HostFileOfferStatus(context.Context, string) (HostFileOffer, error) {
+	return HostFileOffer{ID: "offer", Name: "report.csv", Size: 3, SHA256: "hash", State: "accepted"}, nil
+}
+func (fakeProvider) WaitHostFileOffer(context.Context, string) (HostFileOffer, error) {
+	return HostFileOffer{ID: "offer", Name: "report.csv", Size: 3, SHA256: "hash", State: "accepted"}, nil
+}
+func (fakeProvider) DeliverFileToHost(context.Context, string, string) (HostFileOffer, error) {
+	return HostFileOffer{ID: "offer", Name: "report.csv", Size: 3, SHA256: "hash", State: "delivered"}, nil
+}
 
 func TestToolErrorsAreMCPVisible(t *testing.T) {
 	result, _, err := toolError(errors.New("no image armed"))
@@ -66,5 +78,17 @@ func TestToolsThroughInMemoryMCP(t *testing.T) {
 	status, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "clipboard_status", Arguments: map[string]any{}})
 	if err != nil || status.IsError {
 		t.Fatalf("status failed: %v %#v", err, status)
+	}
+	offer, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "offer_file_to_host", Arguments: map[string]any{"path": "/tmp/report.csv"}})
+	if err != nil || offer.IsError {
+		t.Fatalf("offer failed: %v %#v", err, offer)
+	}
+	offerStatus, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "host_file_offer_status", Arguments: map[string]any{"offer_id": "offer"}})
+	if err != nil || offerStatus.IsError {
+		t.Fatalf("offer status failed: %v %#v", err, offerStatus)
+	}
+	delivered, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "deliver_file_to_host", Arguments: map[string]any{"offer_id": "offer", "path": "/tmp/report.csv"}})
+	if err != nil || delivered.IsError {
+		t.Fatalf("delivery failed: %v %#v", err, delivered)
 	}
 }

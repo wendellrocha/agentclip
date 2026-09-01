@@ -2,8 +2,11 @@ package bridge
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -209,5 +212,78 @@ func TestTextItemIsIndependentFromFileAndImageEndpoints(t *testing.T) {
 	b.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/plain; charset=utf-8" || response.Body.String() != "olá" {
 		t.Fatalf("text response = %d %q %q", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+}
+
+func TestInboundLocalStatusHidesApprovedOffer(t *testing.T) {
+	b := New(time.Minute)
+	if err := b.RegisterPersistentSessionWithUpload("companion:dev", "read-token", "upload-token"); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := b.CreateInboundOffer("companion:dev", "report.csv", 3, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.InboundLocalStatus(); len(got.Offers) != 1 {
+		t.Fatalf("pending offers = %#v, want one", got.Offers)
+	}
+	if _, err := b.AcceptInboundOffer(offer.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.InboundLocalStatus(); len(got.Offers) != 0 {
+		t.Fatalf("approved offer must not remain actionable: %#v", got.Offers)
+	}
+}
+
+func TestOpenInboundTextFileAllowsCSVAndRejectsBinary(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	b := New(time.Minute)
+	if err := b.RegisterPersistentSessionWithUpload("companion:dev", "read-token", "upload-token"); err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte("month,total\n2026-09,84\n")
+	checksum := sha256.Sum256(contents)
+	offer, err := b.CreateInboundOffer("companion:dev", "report.csv", int64(len(contents)), hex.EncodeToString(checksum[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.AcceptInboundOffer(offer.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.DeliverInboundOffer("companion:dev", offer.ID, bytes.NewReader(contents), int64(len(contents))); err != nil {
+		t.Fatal(err)
+	}
+	file, opened, err := b.OpenInboundTextFile(offer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil || !bytes.Equal(data, contents) || opened.Name != "report.csv" {
+		t.Fatalf("opened file = %q %#v %v", data, opened, err)
+	}
+
+	binary := []byte{0, 1, 2}
+	binaryHash := sha256.Sum256(binary)
+	binaryOffer, err := b.CreateInboundOffer("companion:dev", "report.png", int64(len(binary)), hex.EncodeToString(binaryHash[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.AcceptInboundOffer(binaryOffer.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.DeliverInboundOffer("companion:dev", binaryOffer.ID, bytes.NewReader(binary), int64(len(binary))); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.OpenInboundTextFile(binaryOffer.ID); err == nil {
+		t.Fatal("binary file unexpectedly opened as text")
+	}
+	binaryFile, openedBinary, err := b.OpenInboundFile(binaryOffer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer binaryFile.Close()
+	if data, err := io.ReadAll(binaryFile); err != nil || !bytes.Equal(data, binary) || openedBinary.Name != "report.png" {
+		t.Fatalf("opened binary = %q %#v %v", data, openedBinary, err)
 	}
 }

@@ -51,6 +51,27 @@ No agente, peça por exemplo: `Analise o arquivo CSV que está no meu clipboard.
 O Companion acompanha imagens, texto e arquivos copiados do gerenciador de
 arquivos. O conteúdo só deixa o host quando uma ferramenta MCP é chamada.
 
+Ele também pode receber um arquivo criado no servidor. Peça ao agente para
+oferecer o arquivo ao host; a página do Companion exibirá nome, tamanho e
+expiração para você aceitar ou recusar. A chamada do agente espera essa decisão
+por até 10 minutos e, no aceite, retoma o fluxo para que o agente entregue o
+arquivo pelo túnel. O arquivo é salvo numa inbox privada local. O servidor
+nunca escolhe nem recebe o caminho absoluto de destino no host.
+
+Na seção **Arquivos do servidor**, use **Abrir conteúdo** para revisar no
+navegador arquivos recebidos de texto, código ou dados tabulares, como `.csv`,
+`.tsv`, `.sql`, `.json`, `.yaml` e arquivos de código. A página é local e
+privada; o conteúdo é servido como texto simples, sem executar HTML. Formatos
+binários, como `.xlsx` e imagens, exibem **Baixar** e **Copiar caminho**, mas
+não uma prévia de texto.
+
+Após atualizar para uma versão com esse recurso, refaça o pareamento do perfil
+para propagar a capability de upload aos harnesses remotos:
+
+```bash
+agentclip setup bastion-m2 --profile m2
+```
+
 ## Companion, background e reinicializações
 
 `agentclip setup` inicia o Companion local em background (salvo com
@@ -138,6 +159,10 @@ instalados; `--agent` permite escolher um deles.
   uso único.
 - São aceitos até 5 arquivos regulares, 50 MiB cada e 100 MiB por
   materialização. Diretórios e symlinks são rejeitados.
+- Arquivos enviados do servidor para o host exigem aceite local, aceitam um
+  arquivo regular de até 50 MiB por vez, têm SHA-256 verificado e são gravados
+  atomicamente em `~/.cache/agentclip/received/` (ou o cache equivalente da
+  plataforma). Ofertas expiram em 10 minutos e recebidos são limpos após 30.
 - O servidor remoto precisa ser confiável: ele recebe o conteúdo somente após
   uma chamada explícita da ferramenta MCP.
 

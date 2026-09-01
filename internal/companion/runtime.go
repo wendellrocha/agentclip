@@ -112,6 +112,23 @@ func StopRuntime(state RuntimeState) error {
 	return nil
 }
 
+// InboundAction asks the local Companion dashboard service to approve or
+// reject a remote file offer. The control token never leaves the host.
+func InboundAction(state RuntimeState, offerID, action string) error {
+	if offerID == "" || (action != "accept" && action != "reject") {
+		return errors.New("invalid inbound action")
+	}
+	response, err := postJSON("http://"+state.Address+"/v1/control/inbound/"+offerID+"/"+action, state.ControlToken, nil)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("inbound action returned HTTP %d", response.StatusCode)
+	}
+	return nil
+}
+
 func ViewURL(state RuntimeState) string {
 	return "http://" + state.Address + "/view/" + state.ViewToken + "/"
 }

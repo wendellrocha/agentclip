@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -70,6 +71,42 @@ func TestNewHTTPProviderRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := NewHTTPProvider(1234, ""); err == nil {
 		t.Fatal("NewHTTPProvider() error = nil for empty token")
+	}
+}
+
+func TestHTTPProviderWaitsForHostApproval(t *testing.T) {
+	var accepted atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer upload-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path != "/v1/inbound/offers/offer" {
+			http.NotFound(w, r)
+			return
+		}
+		state := "pending"
+		if accepted.Load() {
+			state = "accepted"
+		}
+		_, _ = fmt.Fprintf(w, `{"id":"offer","state":%q}`, state)
+	}))
+	defer server.Close()
+
+	provider := providerForServer(t, server, "read-token")
+	provider.uploadToken = "upload-token"
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		accepted.Store(true)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	offer, err := provider.WaitHostFileOffer(ctx, "offer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offer.State != "accepted" {
+		t.Fatalf("offer state = %q", offer.State)
 	}
 }
 
