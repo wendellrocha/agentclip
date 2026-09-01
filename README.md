@@ -65,6 +65,11 @@ agentclip companion open m2
 agentclip companion stop m2
 ```
 
+`agentclip companion open m2` abre uma página web local, protegida por token,
+com estado do túnel, itens e expiração do clipboard, último erro e um botão
+para parar o Companion. Ela escuta somente em `127.0.0.1`. Veja todos os
+detalhes em [Referência de comandos](COMMANDS.md#página-web-do-companion).
+
 O perfil — destino SSH, porta remota e token de pareamento — fica salvo no
 host. O processo em execução, o bridge e o túnel não: AgentClip **não instala
 um serviço de inicialização automática** (LaunchAgent no macOS, systemd no
@@ -138,6 +143,8 @@ instalados; `--agent` permite escolher um deles.
 
 ## Documentação
 
+- [Referência de comandos](COMMANDS.md): todos os comandos, opções, página web
+  do Companion e comandos internos.
 - [Desenvolvimento](DEVELOPMENT.md): build local, testes, validação de CSV e
   processo de release.
 - [Contribuindo](CONTRIBUTING.md): escopo de contribuições, testes e pull
