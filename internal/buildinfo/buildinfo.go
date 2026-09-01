@@ -3,4 +3,4 @@
 // Release builds replace Version through Go linker flags using the Git tag.
 package buildinfo
 
-var Version = "0.2.0-dev"
+var Version = "0.3.0"

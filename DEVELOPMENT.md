@@ -4,8 +4,8 @@
 
 - Go 1.27 ou superior;
 - SSH para um servidor de teste, caso queira validar o fluxo completo;
-- Ao menos um harness suportado instalado no servidor: Codex, Claude Code ou
-  Gemini CLI.
+- Ao menos um harness suportado instalado no servidor: Codex, Claude Code,
+  Gemini CLI, AGY / Antigravity CLI, OpenCode ou Pi Coding Agent.
 
 ## Build e testes
 
@@ -40,8 +40,9 @@ release publicada; ele não tenta baixar uma versão de desenvolvimento sem que
 `--version vX.Y.Z` seja informado.
 
 `pair`, `setup` e `connect` detectam e configuram todos os harnesses suportados
-instalados no servidor. Para limitar a um harness ou remover exclusivamente a
-entrada MCP do AgentClip, use:
+instalados no servidor. AGY e OpenCode recebem entradas globais de usuário; Pi
+recebe uma extensão global. Para limitar a um harness ou remover exclusivamente
+a entrada MCP/extensão do AgentClip, use:
 
 ```bash
 ./agentclip connect m2 --agent claude

@@ -84,6 +84,8 @@ func main() {
 		err = runCompanion(os.Args[2:])
 	case "mcp":
 		err = runMCP()
+	case "harness":
+		err = runHarness(os.Args[2:])
 	case "bridge":
 		err = runBridge()
 	case "doctor":
@@ -202,14 +204,304 @@ func runMCP() error {
 	return mcpserver.New(provider).Run(context.Background(), &mcp.StdioTransport{})
 }
 
+func runHarness(arguments []string) error {
+	if len(arguments) < 2 {
+		return errors.New("usage: agentclip harness <install|remove> <agy|opencode|pi> --name NAME [--port PORT --token TOKEN]")
+	}
+	settings := flag.NewFlagSet("harness", flag.ContinueOnError)
+	settings.SetOutput(io.Discard)
+	name := settings.String("name", "", "AgentClip MCP entry name")
+	port := settings.Int("port", 0, "bridge loopback port")
+	token := settings.String("token", "", "bridge session token")
+	if err := settings.Parse(arguments[2:]); err != nil {
+		return fmt.Errorf("parse harness options: %w", err)
+	}
+	if *name == "" || settings.NArg() != 0 {
+		return errors.New("usage: agentclip harness <install|remove> <agy|opencode|pi> --name NAME [--port PORT --token TOKEN]")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("find home directory: %w", err)
+	}
+	switch arguments[0] {
+	case "install":
+		if *port < 1 || *port > 65535 || strings.TrimSpace(*token) == "" {
+			return errors.New("harness install requires --port and --token")
+		}
+		return installHarness(home, arguments[1], *name, *port, *token)
+	case "remove":
+		return removeHarness(home, arguments[1], *name)
+	default:
+		return fmt.Errorf("unsupported harness action %q; expected install or remove", arguments[0])
+	}
+}
+
+type harnessMCPEntry struct {
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+type openCodeMCPEntry struct {
+	Type        string            `json:"type"`
+	Command     []string          `json:"command"`
+	Environment map[string]string `json:"environment"`
+	Enabled     bool              `json:"enabled"`
+}
+
+func installHarness(home, harness, name string, port int, token string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("harness entry name is required")
+	}
+	environment := map[string]string{
+		"AGENTCLIP_BRIDGE_PORT":   strconv.Itoa(port),
+		"AGENTCLIP_SESSION_TOKEN": token,
+	}
+	switch strings.ToLower(strings.TrimSpace(harness)) {
+	case "agy", "antigravity":
+		path := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+		return updateJSONMCPEntry(path, "mcpServers", name, harnessMCPEntry{Command: "agentclip", Args: []string{"mcp"}, Env: environment})
+	case "opencode":
+		path := filepath.Join(home, ".config", "opencode", "opencode.json")
+		return updateJSONMCPEntry(path, "mcp", name, openCodeMCPEntry{Type: "local", Command: []string{"agentclip", "mcp"}, Environment: environment, Enabled: true})
+	case "pi":
+		return writePiExtension(home, name, port, token)
+	default:
+		return fmt.Errorf("unsupported harness %q; supported harnesses: agy, opencode, pi", harness)
+	}
+}
+
+func removeHarness(home, harness, name string) error {
+	switch strings.ToLower(strings.TrimSpace(harness)) {
+	case "agy", "antigravity":
+		return removeJSONMCPEntry(filepath.Join(home, ".gemini", "config", "mcp_config.json"), "mcpServers", name)
+	case "opencode":
+		return removeJSONMCPEntry(filepath.Join(home, ".config", "opencode", "opencode.json"), "mcp", name)
+	case "pi":
+		path := filepath.Join(home, ".pi", "agent", "extensions", name+".ts")
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove Pi extension: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported harness %q; supported harnesses: agy, opencode, pi", harness)
+	}
+}
+
+func updateJSONMCPEntry(path, section, name string, entry any) error {
+	root, err := readJSONObject(path)
+	if err != nil {
+		return err
+	}
+	entries := map[string]json.RawMessage{}
+	if raw, found := root[section]; found {
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			return fmt.Errorf("read %s from %s: %w", section, path, err)
+		}
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("encode AgentClip MCP entry: %w", err)
+	}
+	entries[name] = raw
+	root[section], err = json.Marshal(entries)
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", section, err)
+	}
+	return writeJSONObject(path, root)
+}
+
+func removeJSONMCPEntry(path, section, name string) error {
+	root, err := readJSONObject(path)
+	if err != nil {
+		return err
+	}
+	raw, found := root[section]
+	if !found {
+		return nil
+	}
+	entries := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return fmt.Errorf("read %s from %s: %w", section, path, err)
+	}
+	if _, found := entries[name]; !found {
+		return nil
+	}
+	delete(entries, name)
+	if len(entries) == 0 {
+		delete(root, section)
+	} else {
+		root[section], err = json.Marshal(entries)
+		if err != nil {
+			return fmt.Errorf("encode %s: %w", section, err)
+		}
+	}
+	return writeJSONObject(path, root)
+}
+
+func readJSONObject(path string) (map[string]json.RawMessage, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]json.RawMessage{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	root := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return root, nil
+}
+
+func writeJSONObject(path string, root map[string]json.RawMessage) error {
+	data, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	data = append(data, '\n')
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return fmt.Errorf("create configuration directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(directory, ".agentclip-")
+	if err != nil {
+		return fmt.Errorf("create temporary configuration: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write temporary configuration: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace configuration: %w", err)
+	}
+	return os.Chmod(path, 0600)
+}
+
+func writePiExtension(home, name string, port int, token string) error {
+	directory := filepath.Join(home, ".pi", "agent", "extensions")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return fmt.Errorf("create Pi extension directory: %w", err)
+	}
+	path := filepath.Join(directory, name+".ts")
+	if err := os.WriteFile(path, []byte(piExtensionSource(port, token)), 0600); err != nil {
+		return fmt.Errorf("write Pi extension: %w", err)
+	}
+	return os.Chmod(path, 0600)
+}
+
+func piExtensionSource(port int, token string) string {
+	return fmt.Sprintf(`// Generated by AgentClip. Remove with: agentclip uninstall <profile> --agent pi
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
+
+const bridgeURL = "http://127.0.0.1:%d";
+const token = %q;
+
+async function request(path: string, signal?: AbortSignal): Promise<Response> {
+  const response = await fetch(bridgeURL + path, {
+    headers: { Authorization: "Bearer " + token },
+    signal,
+  });
+  if (!response.ok) throw new Error("AgentClip bridge returned " + response.status + ": " + (await response.text()));
+  return response;
+}
+
+function text(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: {} };
+}
+
+export default function (pi: ExtensionAPI) {
+  pi.registerTool({
+    name: "clipboard_status",
+    label: "Clipboard status",
+    description: "Lists clipboard items available after the user explicitly asks to inspect the clipboard. Returns metadata only.",
+    parameters: Type.Object({}),
+    async execute(_id, _params, signal) {
+      return text(await (await request("/v1/status", signal)).json());
+    },
+  });
+
+  pi.registerTool({
+    name: "get_clipboard_image",
+    label: "Get clipboard image",
+    description: "Returns the currently armed clipboard image after the user explicitly asks to inspect it.",
+    parameters: Type.Object({}),
+    async execute(_id, _params, signal) {
+      const response = await request("/v1/image", signal);
+      const data = Buffer.from(await response.arrayBuffer()).toString("base64");
+      return { content: [{ type: "image" as const, source: { type: "base64" as const, mediaType: "image/png", data } }], details: {} };
+    },
+  });
+
+  pi.registerTool({
+    name: "get_clipboard_text",
+    label: "Get clipboard text",
+    description: "Returns an armed clipboard text item after the user explicitly asks to inspect clipboard text.",
+    parameters: Type.Object({ item_id: Type.String() }),
+    async execute(_id, params, signal) {
+      const response = await request("/v1/items/" + encodeURIComponent(params.item_id), signal);
+      return { content: [{ type: "text" as const, text: await response.text() }], details: {} };
+    },
+  });
+
+  pi.registerTool({
+    name: "materialize_clipboard_files",
+    label: "Materialize clipboard files",
+    description: "Transfers explicitly requested clipboard files to private temporary paths on this server. Call only after the user asks to inspect those files.",
+    parameters: Type.Object({ item_ids: Type.Array(Type.String(), { minItems: 1, maxItems: 5 }) }),
+    async execute(_id, params, signal) {
+      const status = await (await request("/v1/status", signal)).json() as { items?: Array<{ id: string; kind: string; name: string; size: number; sha256: string; consumed?: boolean }> };
+      const items = new Map((status.items ?? []).map((item) => [item.id, item]));
+      const selected = params.item_ids.map((id) => items.get(id));
+      if (selected.some((item) => !item || item.kind !== "file" || item.consumed)) throw new Error("one or more requested clipboard items are unavailable files");
+      const root = join(homedir(), ".cache", "agentclip", "inbox");
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      const directory = await mkdtemp(join(root, "snapshot-"));
+      const files: Array<{ item_id: string; path: string; size: number; sha256: string }> = [];
+      try {
+        for (const item of selected) {
+          const response = await request("/v1/items/" + encodeURIComponent(item!.id), signal);
+          const data = Buffer.from(await response.arrayBuffer());
+          if (data.length !== item!.size || createHash("sha256").update(data).digest("hex") !== item!.sha256) throw new Error("clipboard file metadata changed during transfer");
+          const path = join(directory, basename(item!.name) || item!.id);
+          await writeFile(path, data, { mode: 0o600 });
+          files.push({ item_id: item!.id, path, size: item!.size, sha256: item!.sha256 });
+        }
+      } catch (error) {
+        await rm(directory, { recursive: true, force: true });
+        throw error;
+      }
+      const timer = setTimeout(() => void rm(directory, { recursive: true, force: true }), 30 * 60_000);
+      timer.unref();
+      return text({ directory, files });
+    },
+  });
+}
+`, port, token)
+}
+
 func runPair(arguments []string) error {
 	if len(arguments) < 2 {
-		return errors.New("usage: agentclip pair <profile> <ssh-destination> [--agent all|codex|claude|gemini] [--remote-port 39123] [--skip-agent]")
+		return errors.New("usage: agentclip pair <profile> <ssh-destination> [--agent all|codex|claude|gemini|agy|opencode|pi] [--remote-port 39123] [--skip-agent]")
 	}
 	settings := flag.NewFlagSet("pair", flag.ContinueOnError)
 	settings.SetOutput(io.Discard)
 	remotePort := settings.Int("remote-port", 39123, "remote loopback port")
-	agent := settings.String("agent", "all", "remote agent: all, codex, claude, or gemini")
+	agent := settings.String("agent", "all", "remote agent: all, codex, claude, gemini, agy, opencode, or pi")
 	skipAgent := settings.Bool("skip-agent", false, "do not configure an agent on the server")
 	skipCodex := settings.Bool("skip-codex", false, "deprecated alias for --skip-agent")
 	if err := settings.Parse(arguments[2:]); err != nil {
@@ -225,7 +517,7 @@ func runPair(arguments []string) error {
 
 func runSetup(arguments []string) error {
 	if len(arguments) < 1 {
-		return errors.New("usage: agentclip setup <ssh-destination> [--profile NAME] [--agent all|codex|claude|gemini] [--version vX.Y.Z] [--remote-port 39123] [--skip-agent] [--skip-install] [--no-start]")
+		return errors.New("usage: agentclip setup <ssh-destination> [--profile NAME] [--agent all|codex|claude|gemini|agy|opencode|pi] [--version vX.Y.Z] [--remote-port 39123] [--skip-agent] [--skip-install] [--no-start]")
 	}
 	if strings.HasPrefix(arguments[0], "-") {
 		return errors.New("SSH destination must not start with a dash")
@@ -233,7 +525,7 @@ func runSetup(arguments []string) error {
 	settings := flag.NewFlagSet("setup", flag.ContinueOnError)
 	settings.SetOutput(io.Discard)
 	profileName := settings.String("profile", "", "local Companion profile name")
-	agent := settings.String("agent", "all", "remote agent: all, codex, claude, or gemini")
+	agent := settings.String("agent", "all", "remote agent: all, codex, claude, gemini, agy, opencode, or pi")
 	releaseVersion := settings.String("version", "", "AgentClip release tag to install remotely")
 	remotePort := settings.Int("remote-port", 39123, "remote loopback port")
 	skipAgent := settings.Bool("skip-agent", false, "do not configure an agent on the server")
@@ -285,16 +577,16 @@ func runSetup(arguments []string) error {
 
 func runConnect(arguments []string) error {
 	if len(arguments) < 1 {
-		return errors.New("usage: agentclip connect <profile> [--agent all|codex|claude|gemini]")
+		return errors.New("usage: agentclip connect <profile> [--agent all|codex|claude|gemini|agy|opencode|pi]")
 	}
 	settings := flag.NewFlagSet("connect", flag.ContinueOnError)
 	settings.SetOutput(io.Discard)
-	agent := settings.String("agent", "all", "remote agent: all, codex, claude, or gemini")
+	agent := settings.String("agent", "all", "remote agent: all, codex, claude, gemini, agy, opencode, or pi")
 	if err := settings.Parse(arguments[1:]); err != nil {
 		return fmt.Errorf("parse connect options: %w", err)
 	}
 	if settings.NArg() != 0 {
-		return errors.New("usage: agentclip connect <profile> [--agent all|codex|claude|gemini]")
+		return errors.New("usage: agentclip connect <profile> [--agent all|codex|claude|gemini|agy|opencode|pi]")
 	}
 	profile, err := companion.LoadProfile(arguments[0])
 	if err != nil {
@@ -310,16 +602,16 @@ func runConnect(arguments []string) error {
 
 func runUninstall(arguments []string) error {
 	if len(arguments) < 1 {
-		return errors.New("usage: agentclip uninstall <profile> --agent <codex|claude|gemini>")
+		return errors.New("usage: agentclip uninstall <profile> --agent <codex|claude|gemini|agy|opencode|pi>")
 	}
 	settings := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	settings.SetOutput(io.Discard)
-	agent := settings.String("agent", "", "remote agent: codex, claude, or gemini")
+	agent := settings.String("agent", "", "remote agent: codex, claude, gemini, agy, opencode, or pi")
 	if err := settings.Parse(arguments[1:]); err != nil {
 		return fmt.Errorf("parse uninstall options: %w", err)
 	}
 	if *agent == "" || settings.NArg() != 0 {
-		return errors.New("usage: agentclip uninstall <profile> --agent <codex|claude|gemini>")
+		return errors.New("usage: agentclip uninstall <profile> --agent <codex|claude|gemini|agy|opencode|pi>")
 	}
 	profile, err := companion.LoadProfile(arguments[0])
 	if err != nil {
@@ -448,7 +740,7 @@ func configureAllRemoteAgents(profile companion.Profile) ([]agentAdapter, error)
 		configured = append(configured, adapter)
 	}
 	if len(configured) == 0 {
-		return nil, fmt.Errorf("no supported harness is installed on %s; supported harnesses: codex, claude, gemini", profile.Destination)
+		return nil, fmt.Errorf("no supported harness is installed on %s; supported harnesses: codex, claude, gemini, agy, opencode, pi", profile.Destination)
 	}
 	return configured, nil
 }
@@ -497,9 +789,43 @@ func resolveAgentAdapter(agentID string) (agentAdapter, error) {
 				return append(arguments, "--env", fmt.Sprintf("AGENTCLIP_BRIDGE_PORT=%d", profile.RemotePort), "--env", "AGENTCLIP_SESSION_TOKEN="+profile.Token)
 			},
 		}, nil
+	case "agy", "antigravity", "antigravity-cli":
+		return agentAdapter{
+			id: "agy", displayName: "AGY / Antigravity CLI", executable: "agy",
+			removeArguments: func(name string) []string {
+				return []string{"agentclip", "harness", "remove", "agy", "--name", name}
+			},
+			addArguments: func(profile companion.Profile, name string) []string {
+				return harnessInstallArguments("agy", profile, name)
+			},
+		}, nil
+	case "opencode":
+		return agentAdapter{
+			id: "opencode", displayName: "OpenCode", executable: "opencode",
+			removeArguments: func(name string) []string {
+				return []string{"agentclip", "harness", "remove", "opencode", "--name", name}
+			},
+			addArguments: func(profile companion.Profile, name string) []string {
+				return harnessInstallArguments("opencode", profile, name)
+			},
+		}, nil
+	case "pi", "pi-coding-agent":
+		return agentAdapter{
+			id: "pi", displayName: "Pi Coding Agent", executable: "pi",
+			removeArguments: func(name string) []string {
+				return []string{"agentclip", "harness", "remove", "pi", "--name", name}
+			},
+			addArguments: func(profile companion.Profile, name string) []string {
+				return harnessInstallArguments("pi", profile, name)
+			},
+		}, nil
 	default:
-		return agentAdapter{}, fmt.Errorf("unsupported agent %q; supported agents: codex, claude, gemini", agentID)
+		return agentAdapter{}, fmt.Errorf("unsupported agent %q; supported agents: codex, claude, gemini, agy, opencode, pi", agentID)
 	}
+}
+
+func harnessInstallArguments(harness string, profile companion.Profile, name string) []string {
+	return []string{"agentclip", "harness", "install", harness, "--name", name, "--port", strconv.Itoa(profile.RemotePort), "--token", profile.Token}
 }
 
 func agentEnvironmentArguments(arguments []string, profile companion.Profile) []string {
@@ -533,7 +859,7 @@ func remoteSupportedAgentsCommand(destination string) *exec.Cmd {
 }
 
 func remoteSupportedAgentsScript() string {
-	return "export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null || exit 10; for agentclip_harness in codex claude gemini; do command -v \"$agentclip_harness\" >/dev/null && printf '%s\\n' \"$agentclip_harness\"; done; true"
+	return "export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null || exit 10; for agentclip_harness in codex claude gemini agy opencode pi; do command -v \"$agentclip_harness\" >/dev/null && printf '%s\\n' \"$agentclip_harness\"; done; true"
 }
 
 func remoteLoginCommand(destination string, arguments ...string) *exec.Cmd {
@@ -998,5 +1324,5 @@ func randomPort() (int, error) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: agentclip <command>")
-	fmt.Fprintln(os.Stderr, "commands: arm, ssh, pair, setup, connect, uninstall, companion, mcp, doctor, version")
+	fmt.Fprintln(os.Stderr, "commands: arm, ssh, pair, setup, connect, uninstall, companion, mcp, harness, doctor, version")
 }

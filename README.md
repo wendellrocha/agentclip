@@ -68,11 +68,11 @@ a versão atual configura automaticamente do que ainda é planejamento.
 | Harness | Status | Integração |
 | --- | --- | --- |
 | Codex | Suportado | Detectado e configurado automaticamente quando instalado |
-| Claude Code | Implementado — E2E pendente | Detectado e configurado automaticamente quando instalado |
-| Gemini CLI | Implementado — E2E pendente | Detectado e configurado automaticamente quando instalado |
-| AGY / Antigravity CLI | Planejado | MCP `stdio`; configuração JSON de usuário |
-| OpenCode | Planejado | MCP `stdio`; configuração JSON compatível por versão |
-| Pi Coding Agent | Planejado | Requer extensão AgentClip explícita |
+| Claude Code | Suportado | Detectado e configurado automaticamente quando instalado |
+| Gemini CLI | Suportado | Detectado e configurado automaticamente quando instalado |
+| AGY / Antigravity CLI | Suportado | MCP `stdio` em `~/.gemini/config/mcp_config.json` |
+| OpenCode | Suportado | MCP local em `~/.config/opencode/opencode.json` |
+| Pi Coding Agent | Suportado | Extensão global em `~/.pi/agent/extensions/` |
 | Outro cliente MCP | Manual | Configure `agentclip mcp` e as variáveis do perfil manualmente |
 
 | Modelo ou provedor | Status direto | Como usar |
@@ -84,8 +84,9 @@ Os adaptadores planejados nunca instalarão clientes de terceiros sem ação
 explícita do usuário, nem gravarão o token do AgentClip em configurações de
 projeto versionáveis.
 
-Antes de uma nova release, cada adaptador precisa validar imagem, texto e CSV
-em um servidor remoto com o respectivo CLI instalado.
+Os adaptadores nunca instalam harnesses de terceiros. `setup`, `pair` e
+`connect` detectam os seis CLIs suportados e configuram somente os que já estão
+instalados; `--agent` permite escolher um deles.
 
 ## Segurança e limites
 
@@ -110,8 +111,8 @@ em um servidor remoto com o respectivo CLI instalado.
 O MVP inclui snapshots de imagem, texto e arquivos regulares, bridge local
 autenticado, sessão SSH reversa persistente, perfil pareado, dashboard do
 Companion e ferramentas MCP para status, imagem, texto e materialização de
-arquivos. Os adaptadores automáticos atuais são Codex, Claude Code e Gemini
-CLI; AGY, OpenCode e Pi continuam planejados.
+arquivos. Os adaptadores automáticos atuais são Codex, Claude Code, Gemini CLI,
+AGY / Antigravity CLI, OpenCode e Pi Coding Agent.
 
 ## Licença
 

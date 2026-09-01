@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -22,7 +26,7 @@ func TestRemoteSupportedAgentsChecksOnlyBuiltInHarnesses(t *testing.T) {
 	if len(command.Args) != 3 {
 		t.Fatalf("ssh arguments = %#v; expected destination plus one remote command", command.Args)
 	}
-	for _, required := range []string{"command -v agentclip", "codex", "claude", "gemini", "agentclip_harness"} {
+	for _, required := range []string{"command -v agentclip", "codex", "claude", "gemini", "agy", "opencode", "pi", "agentclip_harness"} {
 		if !strings.Contains(command.Args[2], required) {
 			t.Fatalf("remote command = %q; missing %q", command.Args[2], required)
 		}
@@ -126,6 +130,21 @@ func TestAgentAdaptersBuildUserScopedMCPCommands(t *testing.T) {
 			addContains:    []string{"gemini", "mcp", "add", "agentclip-m2", "agentclip", "mcp", "--scope", "user", "AGENTCLIP_BRIDGE_PORT=39123", "AGENTCLIP_SESSION_TOKEN=pair-token"},
 			removeContains: []string{"gemini", "mcp", "remove", "--scope", "user", "agentclip-m2"},
 		},
+		{
+			id: "agy", executable: "agy",
+			addContains:    []string{"agentclip", "harness", "install", "agy", "--name", "agentclip-m2", "--port", "39123", "--token", "pair-token"},
+			removeContains: []string{"agentclip", "harness", "remove", "agy", "--name", "agentclip-m2"},
+		},
+		{
+			id: "opencode", executable: "opencode",
+			addContains:    []string{"agentclip", "harness", "install", "opencode", "--name", "agentclip-m2", "--port", "39123", "--token", "pair-token"},
+			removeContains: []string{"agentclip", "harness", "remove", "opencode", "--name", "agentclip-m2"},
+		},
+		{
+			id: "pi", executable: "pi",
+			addContains:    []string{"agentclip", "harness", "install", "pi", "--name", "agentclip-m2", "--port", "39123", "--token", "pair-token"},
+			removeContains: []string{"agentclip", "harness", "remove", "pi", "--name", "agentclip-m2"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.id, func(t *testing.T) {
@@ -143,7 +162,7 @@ func TestAgentAdaptersBuildUserScopedMCPCommands(t *testing.T) {
 }
 
 func TestResolveAgentAdapterRejectsUnknownAgent(t *testing.T) {
-	if _, err := resolveAgentAdapter("opencode"); err == nil {
+	if _, err := resolveAgentAdapter("aider"); err == nil {
 		t.Fatal("expected unsupported agent error")
 	}
 }
@@ -159,6 +178,83 @@ func TestDisplayAgents(t *testing.T) {
 	}
 	if got, want := displayAgents([]agentAdapter{codex, gemini}), "Codex, Gemini CLI"; got != want {
 		t.Fatalf("displayAgents() = %q, want %q", got, want)
+	}
+}
+
+func TestHarnessConfigurationPreservesOtherEntries(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"other":{"command":"other"}},"keep":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := installHarness(home, "agy", "agentclip-m2", 39123, "pair-token"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Keep       bool                       `json:"keep"`
+		MCPServers map[string]harnessMCPEntry `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if !config.Keep || config.MCPServers["other"].Command != "other" {
+		t.Fatalf("unrelated configuration was changed: %s", data)
+	}
+	entry := config.MCPServers["agentclip-m2"]
+	if entry.Command != "agentclip" || !reflect.DeepEqual(entry.Args, []string{"mcp"}) || entry.Env["AGENTCLIP_SESSION_TOKEN"] != "pair-token" {
+		t.Fatalf("AgentClip AGY entry = %#v", entry)
+	}
+	if err := removeHarness(home, "agy", "agentclip-m2"); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "agentclip-m2") || !strings.Contains(string(data), "other") {
+		t.Fatalf("AgentClip removal did not preserve other entry: %s", data)
+	}
+}
+
+func TestOpenCodeAndPiHarnessConfiguration(t *testing.T) {
+	home := t.TempDir()
+	if err := installHarness(home, "opencode", "agentclip-m2", 39123, "pair-token"); err != nil {
+		t.Fatal(err)
+	}
+	openCode, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`"type": "local"`, `"command": [`, `"agentclip"`, `"mcp"`, `"environment"`, `"AGENTCLIP_BRIDGE_PORT": "39123"`} {
+		if !strings.Contains(string(openCode), required) {
+			t.Fatalf("OpenCode configuration missing %q: %s", required, openCode)
+		}
+	}
+	if err := installHarness(home, "pi", "agentclip-m2", 39123, "pair-token"); err != nil {
+		t.Fatal(err)
+	}
+	piPath := filepath.Join(home, ".pi", "agent", "extensions", "agentclip-m2.ts")
+	piExtension, err := os.ReadFile(piPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"clipboard_status", "get_clipboard_image", "get_clipboard_text", "materialize_clipboard_files", "127.0.0.1:39123", "pair-token"} {
+		if !strings.Contains(string(piExtension), required) {
+			t.Fatalf("Pi extension missing %q", required)
+		}
+	}
+	if err := removeHarness(home, "pi", "agentclip-m2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(piPath); !os.IsNotExist(err) {
+		t.Fatalf("Pi extension still exists after removal: %v", err)
 	}
 }
 
