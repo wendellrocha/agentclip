@@ -9,14 +9,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/wendellrocha/agentclip/internal/bridge"
 	"github.com/wendellrocha/agentclip/internal/daemon"
 	"github.com/wendellrocha/agentclip/internal/mcpserver"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestArmedImageFlowsFromBridgeToMCP(t *testing.T) {
@@ -132,7 +133,7 @@ func TestCSVMaterializesFromBridgeToPrivateRemotePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("remote file permissions = %o", info.Mode().Perm())
 	}
 	if _, err := provider.MaterializeFiles(context.Background(), []string{snapshot.Items[0].ID}); err == nil {

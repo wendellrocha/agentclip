@@ -21,10 +21,12 @@ No Windows, execute no PowerShell:
 irm https://raw.githubusercontent.com/wendellrocha/agentclip/main/scripts/install.ps1 | iex
 ```
 
-Os scripts detectam a plataforma, verificam o SHA-256 da release e instalam o
-binário no diretório do usuário. Para uma versão específica, use
-`--version vX.Y.Z` no instalador POSIX. Os artefatos e checksums também estão
-nas [GitHub Releases](https://github.com/wendellrocha/agentclip/releases).
+Os scripts detectam a plataforma, consultam a release mais recente, verificam
+o SHA-256 e inspecionam a versão já instalada. Eles baixam e atualizam somente
+quando a versão encontrada é mais nova; repetir o instalador é seguro. Para uma
+versão específica, use `--version vX.Y.Z` no instalador POSIX ou
+`-Version vX.Y.Z` no PowerShell. Os artefatos e checksums também estão nas
+[GitHub Releases](https://github.com/wendellrocha/agentclip/releases).
 
 ## Início rápido
 
@@ -48,6 +50,39 @@ No agente, peça por exemplo: `Analise o arquivo CSV que está no meu clipboard.
 
 O Companion acompanha imagens, texto e arquivos copiados do gerenciador de
 arquivos. O conteúdo só deixa o host quando uma ferramenta MCP é chamada.
+
+## Companion, background e reinicializações
+
+`agentclip setup` inicia o Companion local em background (salvo com
+`--no-start`); `agentclip companion start <perfil>` faz o mesmo manualmente.
+O processo acompanha o clipboard, mantém o bridge local e abre o túnel SSH
+reverso para o destino salvo no perfil. A view e o estado atual podem ser
+consultados sem prender o terminal:
+
+```bash
+agentclip companion status m2
+agentclip companion open m2
+agentclip companion stop m2
+```
+
+O perfil — destino SSH, porta remota e token de pareamento — fica salvo no
+host. O processo em execução, o bridge e o túnel não: AgentClip **não instala
+um serviço de inicialização automática** (LaunchAgent no macOS, systemd no
+Linux ou Agendador de Tarefas no Windows), nem escolhe automaticamente o
+último perfil após o login. Portanto, se o **host** for reiniciado, inicie o
+perfil desejado novamente:
+
+```bash
+agentclip companion start m2
+```
+
+Se apenas o **servidor remoto** cair ou for reiniciado enquanto o Companion
+local continua rodando, ele tenta restabelecer o túnel SSH automaticamente,
+com espera progressiva de 1 a 30 segundos. Quando a conexão voltar, o mesmo
+perfil e a mesma porta remota voltam a ser usados. Se quiser que o Companion
+suba junto com o sistema, use o gerenciador de serviços do seu sistema
+operacional para executar explicitamente `agentclip companion start <perfil>`
+após o login; essa automação ainda não é configurada pelo AgentClip.
 
 Por padrão, `setup`, `pair` e `connect` usam todos os harnesses suportados que
 encontrarem. A instalação/registro da integração é automática: não é preciso

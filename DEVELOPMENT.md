@@ -53,6 +53,25 @@ a entrada MCP/extensão do AgentClip, use:
 `disconnect` é mantido como alias compatível de `uninstall`. Nenhum dos dois
 remove o binário ou desinstala o harness remoto.
 
+## Ciclo de vida do Companion
+
+`./agentclip companion start m2` retorna ao terminal depois de iniciar o
+processo local em background. Esse processo acompanha o clipboard, mantém o
+bridge e reconecta o túnel SSH quando o servidor remoto ou a conexão cai,
+usando espera progressiva de 1 a 30 segundos. Inspecione ou pare-o com:
+
+```bash
+./agentclip companion status m2
+./agentclip companion open m2
+./agentclip companion stop m2
+```
+
+O perfil é persistido em `os.UserConfigDir()/agentclip/profiles/`, mas o
+Companion não é registrado como serviço de inicialização no macOS, Linux ou
+Windows. Após reiniciar o host, rode `./agentclip companion start m2` de novo.
+Um reinício somente do servidor remoto não exige esse comando: o Companion
+que ainda estiver rodando tentará abrir novamente o mesmo túnel reverso.
+
 ## Validar arquivos e CSV
 
 1. Copie um arquivo, como `vendas.csv`, no Finder, Explorer ou gerenciador de
