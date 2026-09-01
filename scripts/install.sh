@@ -121,7 +121,7 @@ esac
 if [ "$requested_version" = "latest" ]; then
   echo "Buscando a versão mais recente do AgentClip..."
   requested_version="$(curl -fsSL -H "User-Agent: agentclip-installer" "https://api.github.com/repos/${repository}/releases/latest" \
-    | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n 1)"
 else
   echo "Versão solicitada: ${requested_version}"
