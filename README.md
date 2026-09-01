@@ -35,8 +35,9 @@ agentclip setup bastion-m2 --profile m2
 ```
 
 O comando instala a versão compatível no servidor Linux/macOS via SSH, detecta
-Codex, Claude Code e Gemini CLI instalados no servidor, configura o MCP em cada
-um deles, cria o perfil local e inicia o Companion. Em seguida:
+todos os harnesses suportados já instalados, registra automaticamente a
+integração AgentClip em cada um deles, cria o perfil local e inicia o Companion.
+Em seguida:
 
 ```bash
 ssh bastion-m2
@@ -49,9 +50,10 @@ O Companion acompanha imagens, texto e arquivos copiados do gerenciador de
 arquivos. O conteúdo só deixa o host quando uma ferramenta MCP é chamada.
 
 Por padrão, `setup`, `pair` e `connect` usam todos os harnesses suportados que
-encontrarem. Use `--agent` para limitar a configuração a um deles. Para remover
-apenas o MCP do AgentClip de um harness, use `uninstall`; o CLI/harness e o
-perfil local continuam intactos:
+encontrarem. A instalação/registro da integração é automática: não é preciso
+editar JSON nem criar a extensão do Pi manualmente. Use `--agent` para limitar
+a configuração a um deles. Para remover apenas a integração do AgentClip de um
+harness, use `uninstall`; o CLI/harness e o perfil local continuam intactos:
 
 ```bash
 agentclip setup bastion-m2 --profile m2 --agent claude
@@ -70,9 +72,9 @@ a versão atual configura automaticamente do que ainda é planejamento.
 | Codex | Suportado | Detectado e configurado automaticamente quando instalado |
 | Claude Code | Suportado | Detectado e configurado automaticamente quando instalado |
 | Gemini CLI | Suportado | Detectado e configurado automaticamente quando instalado |
-| AGY / Antigravity CLI | Suportado | MCP `stdio` em `~/.gemini/config/mcp_config.json` |
-| OpenCode | Suportado | MCP local em `~/.config/opencode/opencode.json` |
-| Pi Coding Agent | Suportado | Extensão global em `~/.pi/agent/extensions/` |
+| AGY / Antigravity CLI | Suportado | AgentClip cria/atualiza automaticamente o MCP global |
+| OpenCode | Suportado | AgentClip cria/atualiza automaticamente o MCP local global |
+| Pi Coding Agent | Suportado | AgentClip instala automaticamente uma extensão global |
 | Outro cliente MCP | Manual | Configure `agentclip mcp` e as variáveis do perfil manualmente |
 
 | Modelo ou provedor | Status direto | Como usar |
