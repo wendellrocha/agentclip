@@ -1,0 +1,33 @@
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - skip-changelog
+  categories:
+    - title: "⚠️ Mudanças incompatíveis"
+      labels:
+        - breaking-change
+        - semver-major
+    - title: "✨ Novidades"
+      labels:
+        - feature
+        - enhancement
+        - semver-minor
+    - title: "🐛 Correções"
+      labels:
+        - bug
+        - bugfix
+        - fix
+    - title: "🔒 Segurança"
+      labels:
+        - security
+    - title: "📚 Documentação"
+      labels:
+        - documentation
+        - docs
+    - title: "📦 Dependências"
+      labels:
+        - dependencies
+    - title: "Outras mudanças"
+      labels:
+        - "*"

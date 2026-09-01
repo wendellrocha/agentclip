@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish (for example, v0.2.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.VERSION }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
+            echo "Tag must use semantic versioning, for example v0.2.0" >&2
+            exit 1
+          }
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          build() {
+            local os="$1"
+            local arch="$2"
+            local extension="$3"
+            local archive_format="$4"
+            local base="agentclip_${VERSION}_${os}_${arch}"
+            local directory="dist/${base}"
+
+            mkdir -p "$directory"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build \
+              -trimpath \
+              -ldflags="-s -w -X main.version=${VERSION}" \
+              -o "${directory}/agentclip${extension}" \
+              ./cmd/agentclip
+            cp README.md "$directory/"
+
+            if [[ "$archive_format" == "zip" ]]; then
+              (cd dist && zip -qr "${base}.zip" "$base")
+            else
+              tar -C dist -czf "dist/${base}.tar.gz" "$base"
+            fi
+          }
+
+          build linux amd64 "" tar.gz
+          build linux arm64 "" tar.gz
+          build darwin amd64 "" tar.gz
+          build darwin arm64 "" tar.gz
+          build windows amd64 .exe zip
+          (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+            scripts/install.sh
+            scripts/install.ps1
