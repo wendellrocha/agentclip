@@ -235,6 +235,45 @@ func TestInboundLocalStatusHidesApprovedOffer(t *testing.T) {
 	}
 }
 
+func TestInboundLocalStatusShowsNewestOffersAndDeliveriesFirst(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	b := New(time.Minute)
+	if err := b.RegisterPersistentSessionWithUpload("companion:dev", "read-token", "upload-token"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	b.now = func() time.Time { return now }
+	emptyHash := sha256.Sum256(nil)
+	checksum := hex.EncodeToString(emptyHash[:])
+	older, err := b.CreateInboundOffer("companion:dev", "older.csv", 0, checksum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	newer, err := b.CreateInboundOffer("companion:dev", "newer.csv", 0, checksum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := b.InboundLocalStatus()
+	if len(status.Offers) != 2 || status.Offers[0].ID != newer.ID || status.Offers[1].ID != older.ID {
+		t.Fatalf("offers = %#v, want newest first", status.Offers)
+	}
+
+	for _, offer := range []InboundOffer{older, newer} {
+		if _, err := b.AcceptInboundOffer(offer.ID); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Minute)
+		if _, err := b.DeliverInboundOffer("companion:dev", offer.ID, strings.NewReader(""), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status = b.InboundLocalStatus()
+	if len(status.Received) != 2 || status.Received[0].ID != newer.ID || status.Received[1].ID != older.ID {
+		t.Fatalf("received = %#v, want newest first", status.Received)
+	}
+}
+
 func TestOpenInboundTextFileAllowsCSVAndRejectsBinary(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	b := New(time.Minute)

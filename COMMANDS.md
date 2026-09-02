@@ -117,13 +117,16 @@ servidor. A transferência acontece apenas quando o harness remoto chama uma
 ferramenta MCP após um pedido explícito do usuário.
 
 Quando um agente remoto oferece um arquivo para o host, esta página mostra a
-seção **Arquivos do servidor**. Ela exibe nome, tamanho e expiração da oferta;
-use **Aceitar** para liberar a entrega ou **Recusar** para cancelá-la. Ao
+seção **Arquivos do servidor**. As ofertas pendentes e os arquivos já recebidos
+são exibidos separadamente, cada grupo ordenado do mais recente para o menos
+recente. A oferta mostra data e hora de recebimento, tamanho e expiração; use
+**Aceitar** para liberar a entrega ou **Recusar** para cancelá-la. Ao
 aceitar ou recusar, a oferta sai imediatamente da lista e a chamada MCP remota
 que a criou recebe a decisão (ela espera por até 10 minutos). O remoto não
 consegue enviar bytes nem escolher o destino local antes desse aceite. Um
 recebimento validado fica em `~/.cache/agentclip/received/` (ou cache
-equivalente) e é removido automaticamente após 30 minutos.
+equivalente) e é removido automaticamente após 30 minutos. Os recebidos exibem
+também a data e hora em que a transferência foi concluída.
 
 Arquivos recebidos de texto, código e dados tabulares exibem também **Abrir
 conteúdo**. O botão abre uma nova aba local com o conteúdo bruto como texto

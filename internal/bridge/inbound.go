@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -205,6 +206,21 @@ func (b *Bridge) InboundLocalStatus() InboundLocalStatus {
 			status.Offers = append(status.Offers, offer.InboundOffer)
 		}
 	}
+	// Maps deliberately back the inbound store, but their iteration order is
+	// undefined. Keep the Companion inbox predictable by surfacing the newest
+	// offers and deliveries first.
+	sort.Slice(status.Offers, func(i, j int) bool {
+		if status.Offers[i].CreatedAt.Equal(status.Offers[j].CreatedAt) {
+			return status.Offers[i].ID > status.Offers[j].ID
+		}
+		return status.Offers[i].CreatedAt.After(status.Offers[j].CreatedAt)
+	})
+	sort.Slice(status.Received, func(i, j int) bool {
+		if status.Received[i].DeliveredAt.Equal(status.Received[j].DeliveredAt) {
+			return status.Received[i].ID > status.Received[j].ID
+		}
+		return status.Received[i].DeliveredAt.After(status.Received[j].DeliveredAt)
+	})
 	return status
 }
 

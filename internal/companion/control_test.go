@@ -52,7 +52,7 @@ func TestControlServerServesPrivateStatusViewAndStop(t *testing.T) {
 	if !strings.Contains(string(markup), "AgentClip Companion") {
 		t.Fatal("dashboard markup missing")
 	}
-	for _, expected := range []string{"btn-accept", "btn-reject", "Abrir conteúdo", "Baixar", "Copiar caminho", "overflow-wrap:anywhere"} {
+	for _, expected := range []string{"btn-accept", "btn-reject", "Abrir conteúdo", "Baixar", "Copiar caminho", "overflow-wrap:anywhere", "Oferta recebida em", "Recebido em", "Recebidos recentemente", "formatDateTime", "formatBytes"} {
 		if !strings.Contains(string(markup), expected) {
 			t.Fatalf("dashboard markup missing %q", expected)
 		}
