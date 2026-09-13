@@ -34,7 +34,9 @@ import (
 	"github.com/wendellrocha/agentclip/internal/companion"
 	"github.com/wendellrocha/agentclip/internal/daemon"
 	"github.com/wendellrocha/agentclip/internal/mcpserver"
+	"github.com/wendellrocha/agentclip/internal/release"
 	"github.com/wendellrocha/agentclip/internal/sshsession"
+	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
 
 const (
@@ -91,6 +93,10 @@ func main() {
 		err = runBridge()
 	case "doctor":
 		err = runDoctor()
+	case "logs":
+		err = runLogs(os.Args[2:])
+	case "upgrade":
+		err = runUpgrade(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(buildinfo.Version)
 		return
@@ -465,6 +471,17 @@ function text(value: unknown) {
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
+    name: "agentclip_update_status",
+    label: "AgentClip update status",
+    description: "Checks the AgentClip release status. When update_available is true, run agentclip upgrade on the host.",
+    parameters: Type.Object({}),
+    async execute(_id, _params, signal) {
+      const status = await (await request("/v1/release", signal)).json() as { update_available?: boolean };
+      return text({ ...status, ...(status.update_available ? { upgrade_command: "agentclip upgrade" } : {}) });
+    },
+  });
+
+  pi.registerTool({
     name: "clipboard_status",
     label: "Clipboard status",
     description: "Lists clipboard items available after the user explicitly asks to inspect the clipboard. Returns metadata only.",
@@ -619,13 +636,21 @@ func runSetup(arguments []string) error {
 	if name == "" {
 		name = defaultProfileName(arguments[0])
 	}
+	existingIdentityFile := ""
+	if existing, err := companion.LoadProfile(name); err == nil {
+		existingIdentityFile = existing.SSHIdentityFile
+	}
+	identityFile, err := ensureSetupSSHIdentity(arguments[0], name, existingIdentityFile)
+	if err != nil {
+		return err
+	}
 	if !*skipInstall {
 		tag, err := releaseTag(*releaseVersion)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("Installing AgentClip %s on %s...\n", tag, arguments[0])
-		if err := remoteInstallCommand(arguments[0], tag).Run(); err != nil {
+		if err := remoteInstallCommandWithIdentity(arguments[0], identityFile, tag).Run(); err != nil {
 			return fmt.Errorf("install AgentClip on %s: %w", arguments[0], err)
 		}
 	}
@@ -636,7 +661,7 @@ func runSetup(arguments []string) error {
 			return err
 		}
 	}
-	profile, err := pairProfile(name, arguments[0], *remotePort, *agent, *skipAgent || *skipCodex)
+	profile, err := pairProfileWithIdentity(name, arguments[0], *remotePort, *agent, *skipAgent || *skipCodex, identityFile)
 	if err != nil {
 		return err
 	}
@@ -644,7 +669,7 @@ func runSetup(arguments []string) error {
 		fmt.Printf("Setup complete for %q. Start it with: agentclip companion start %s\n", profile.Name, profile.Name)
 		return nil
 	}
-	if err := startCompanion(profile.Name); err != nil {
+	if err := startCompanion(profile.Name, false); err != nil {
 		return err
 	}
 	fmt.Printf("Setup complete for %q. SSH normally, then ask your agent to inspect the clipboard.\n", profile.Name)
@@ -697,7 +722,7 @@ func runUninstall(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	if err := remoteLoginCommand(profile.Destination, adapter.removeArguments("agentclip-"+profile.Name)...).Run(); err != nil {
+	if err := remoteLoginForProfile(profile, adapter.removeArguments("agentclip-"+profile.Name)...).Run(); err != nil {
 		return fmt.Errorf("remove AgentClip MCP from %s on %s: %w", adapter.displayName, profile.Destination, err)
 	}
 	fmt.Printf("Removed the AgentClip MCP entry from %s for profile %q. The harness remains installed.\n", adapter.displayName, profile.Name)
@@ -705,6 +730,10 @@ func runUninstall(arguments []string) error {
 }
 
 func pairProfile(name, destination string, remotePort int, agent string, skipAgent bool) (companion.Profile, error) {
+	return pairProfileWithIdentity(name, destination, remotePort, agent, skipAgent, "")
+}
+
+func pairProfileWithIdentity(name, destination string, remotePort int, agent string, skipAgent bool, identityFile string) (companion.Profile, error) {
 	token, err := randomToken(32)
 	if err != nil {
 		return companion.Profile{}, err
@@ -715,7 +744,7 @@ func pairProfile(name, destination string, remotePort int, agent string, skipAge
 	}
 	profile := companion.Profile{
 		Name: name, Destination: destination, RemotePort: remotePort,
-		Token: token, UploadToken: uploadToken, CreatedAt: time.Now().UTC(),
+		Token: token, UploadToken: uploadToken, SSHIdentityFile: identityFile, CreatedAt: time.Now().UTC(),
 	}
 	if err := profile.Validate(); err != nil {
 		return companion.Profile{}, err
@@ -794,7 +823,7 @@ func configureRemoteAgents(profile companion.Profile, selection string) ([]agent
 	if err != nil {
 		return nil, err
 	}
-	if err := remotePreflightCommand(profile.Destination, adapter.executable).Run(); err != nil {
+	if err := remotePreflightForProfile(profile, adapter.executable).Run(); err != nil {
 		return nil, fmt.Errorf("remote preflight failed: install `agentclip` and `%s` on %s, or retry with --skip-agent: %w", adapter.executable, profile.Destination, err)
 	}
 	if err := configureRemoteAdapter(profile, adapter); err != nil {
@@ -804,7 +833,7 @@ func configureRemoteAgents(profile companion.Profile, selection string) ([]agent
 }
 
 func configureAllRemoteAgents(profile companion.Profile) ([]agentAdapter, error) {
-	output, err := remoteSupportedAgentsCommand(profile.Destination).Output()
+	output, err := remoteSupportedAgentsForProfile(profile).Output()
 	if err != nil {
 		return nil, fmt.Errorf("remote preflight failed: install `agentclip` on %s, or retry with --skip-agent: %w", profile.Destination, err)
 	}
@@ -828,8 +857,8 @@ func configureAllRemoteAgents(profile companion.Profile) ([]agentAdapter, error)
 func configureRemoteAdapter(profile companion.Profile, adapter agentAdapter) error {
 	name := "agentclip-" + profile.Name
 	// Re-pairing deliberately replaces only AgentClip's own named MCP entry.
-	_ = remoteLoginCommand(profile.Destination, adapter.removeArguments(name)...).Run()
-	if err := remoteLoginCommand(profile.Destination, adapter.addArguments(profile, name)...).Run(); err != nil {
+	_ = remoteLoginForProfile(profile, adapter.removeArguments(name)...).Run()
+	if err := remoteLoginForProfile(profile, adapter.addArguments(profile, name)...).Run(); err != nil {
 		return fmt.Errorf("configure %s MCP on %s: %w", adapter.displayName, profile.Destination, err)
 	}
 	return nil
@@ -932,18 +961,34 @@ func displayAgents(adapters []agentAdapter) string {
 }
 
 func remotePreflightCommand(destination, agentExecutable string) *exec.Cmd {
+	return remotePreflightCommandWithIdentity(destination, "", agentExecutable)
+}
+
+func remotePreflightForProfile(profile companion.Profile, agentExecutable string) *exec.Cmd {
+	return remotePreflightCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, agentExecutable)
+}
+
+func remotePreflightCommandWithIdentity(destination, identityFile, agentExecutable string) *exec.Cmd {
 	// ssh combines all arguments after the destination into a remote shell
 	// command. Use a login shell as well: remote AgentClip and Codex are often
 	// installed through ~/.profile or Volta, neither of which a plain SSH
 	// command is required to load.
 	check := "export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null && command -v " + shellQuote(agentExecutable) + " >/dev/null"
-	return exec.Command("ssh", destination, "sh -lc "+shellQuote(check))
+	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(check))
 }
 
 func remoteSupportedAgentsCommand(destination string) *exec.Cmd {
+	return remoteSupportedAgentsCommandWithIdentity(destination, "")
+}
+
+func remoteSupportedAgentsForProfile(profile companion.Profile) *exec.Cmd {
+	return remoteSupportedAgentsCommandWithIdentity(profile.Destination, profile.SSHIdentityFile)
+}
+
+func remoteSupportedAgentsCommandWithIdentity(destination, identityFile string) *exec.Cmd {
 	// This deliberately detects only built-in adapters. It neither installs
 	// harnesses nor scans project-level configuration files.
-	return exec.Command("ssh", destination, "sh -lc "+shellQuote(remoteSupportedAgentsScript()))
+	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(remoteSupportedAgentsScript()))
 }
 
 func remoteSupportedAgentsScript() string {
@@ -951,16 +996,173 @@ func remoteSupportedAgentsScript() string {
 }
 
 func remoteLoginCommand(destination string, arguments ...string) *exec.Cmd {
+	return remoteLoginCommandWithIdentity(destination, "", arguments...)
+}
+
+func remoteLoginForProfile(profile companion.Profile, arguments ...string) *exec.Cmd {
+	return remoteLoginCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, arguments...)
+}
+
+func remoteLoginCommandWithIdentity(destination, identityFile string, arguments ...string) *exec.Cmd {
 	quoted := make([]string, len(arguments))
 	for index, argument := range arguments {
 		quoted[index] = shellQuote(argument)
 	}
 	script := "export PATH=\"$HOME/.local/bin:$PATH\"; " + strings.Join(quoted, " ")
-	return exec.Command("ssh", destination, "sh -lc "+shellQuote(script))
+	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(script))
 }
 
 func remoteInstallCommand(destination, tag string) *exec.Cmd {
-	return exec.Command("ssh", destination, "sh -lc "+shellQuote(remoteInstallScript(tag)))
+	return remoteInstallCommandWithIdentity(destination, "", tag)
+}
+
+func remoteInstallCommandWithIdentity(destination, identityFile, tag string) *exec.Cmd {
+	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(remoteInstallScript(tag)))
+}
+
+func remoteSSHCommand(destination, identityFile, remoteCommand string) *exec.Cmd {
+	arguments := []string{}
+	if identityFile != "" {
+		arguments = append(arguments, "-i", identityFile, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes")
+	}
+	arguments = append(arguments, destination, remoteCommand)
+	return exec.Command("ssh", arguments...)
+}
+
+// ensureSetupSSHIdentity preserves an already-working SSH key setup. When the
+// destination rejects non-interactive key authentication, it creates a
+// dedicated AgentClip key and installs its public half through one interactive
+// password login before the rest of setup runs.
+func ensureSetupSSHIdentity(destination, profileName, existingIdentityFile string) (string, error) {
+	output, err := sshKeyCheckCommand(destination, existingIdentityFile).CombinedOutput()
+	if err == nil {
+		return existingIdentityFile, nil
+	}
+	if !sshAuthenticationFailure(output) {
+		return "", fmt.Errorf("check SSH key authentication for %s: %s", destination, sshErrorSummary(output, err))
+	}
+	identityFile, publicKey, err := ensureAgentClipSSHKey(profileName)
+	if err != nil {
+		return "", err
+	}
+	fmt.Printf("Configuring a dedicated AgentClip SSH key for %s (your password may be requested once)...\n", destination)
+	bootstrap := bootstrapSSHKeyCommand(destination, publicKey)
+	bootstrap.Stdin, bootstrap.Stdout, bootstrap.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := bootstrap.Run(); err != nil {
+		return "", fmt.Errorf("install AgentClip SSH key on %s: %w", destination, err)
+	}
+	output, err = sshKeyCheckCommand(destination, identityFile).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("verify AgentClip SSH key on %s: %s", destination, sshErrorSummary(output, err))
+	}
+	return identityFile, nil
+}
+
+func sshKeyCheckCommand(destination, identityFile string) *exec.Cmd {
+	arguments := []string{"-o", "BatchMode=yes"}
+	if identityFile != "" {
+		arguments = append(arguments, "-i", identityFile, "-o", "IdentitiesOnly=yes")
+	}
+	arguments = append(arguments, destination, "true")
+	return exec.Command("ssh", arguments...)
+}
+
+func sshAuthenticationFailure(output []byte) bool {
+	message := strings.ToLower(string(output))
+	return strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "authentication failed") ||
+		strings.Contains(message, "too many authentication failures") ||
+		strings.Contains(message, "no supported authentication methods")
+}
+
+func sshErrorSummary(output []byte, err error) string {
+	message := strings.TrimSpace(string(output))
+	if message == "" {
+		message = err.Error()
+	}
+	if len(message) > 512 {
+		message = message[:512] + "…"
+	}
+	return message
+}
+
+func ensureAgentClipSSHKey(profileName string) (string, string, error) {
+	identityFile, err := companion.SSHIdentityPath(profileName)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(identityFile), 0700); err != nil {
+		return "", "", fmt.Errorf("create AgentClip SSH key directory: %w", err)
+	}
+	if err := os.Chmod(filepath.Dir(identityFile), 0700); err != nil {
+		return "", "", fmt.Errorf("secure AgentClip SSH key directory: %w", err)
+	}
+	publicFile := identityFile + ".pub"
+	privateInfo, privateErr := os.Lstat(identityFile)
+	publicInfo, publicErr := os.Lstat(publicFile)
+	if privateErr == nil && (!privateInfo.Mode().IsRegular() || privateInfo.Mode()&os.ModeSymlink != 0) {
+		return "", "", errors.New("AgentClip SSH private key is not a regular file")
+	}
+	if publicErr == nil && (!publicInfo.Mode().IsRegular() || publicInfo.Mode()&os.ModeSymlink != 0) {
+		return "", "", errors.New("AgentClip SSH public key is not a regular file")
+	}
+	if privateErr != nil && !os.IsNotExist(privateErr) {
+		return "", "", fmt.Errorf("inspect AgentClip SSH private key: %w", privateErr)
+	}
+	if publicErr != nil && !os.IsNotExist(publicErr) {
+		return "", "", fmt.Errorf("inspect AgentClip SSH public key: %w", publicErr)
+	}
+	if os.IsNotExist(privateErr) && !os.IsNotExist(publicErr) {
+		return "", "", errors.New("AgentClip SSH public key exists without its private key")
+	}
+	if os.IsNotExist(privateErr) {
+		command := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "agentclip:"+profileName, "-f", identityFile)
+		if output, err := command.CombinedOutput(); err != nil {
+			return "", "", fmt.Errorf("generate AgentClip SSH key (requires ssh-keygen): %s", sshErrorSummary(output, err))
+		}
+	} else if os.IsNotExist(publicErr) {
+		output, err := exec.Command("ssh-keygen", "-y", "-f", identityFile).Output()
+		if err != nil {
+			return "", "", fmt.Errorf("derive AgentClip SSH public key: %w", err)
+		}
+		if err := os.WriteFile(publicFile, output, 0600); err != nil {
+			return "", "", fmt.Errorf("write AgentClip SSH public key: %w", err)
+		}
+	}
+	if err := os.Chmod(identityFile, 0600); err != nil {
+		return "", "", fmt.Errorf("secure AgentClip SSH private key: %w", err)
+	}
+	if err := os.Chmod(publicFile, 0600); err != nil {
+		return "", "", fmt.Errorf("secure AgentClip SSH public key: %w", err)
+	}
+	publicKey, err := readAgentClipSSHPublicKey(publicFile)
+	if err != nil {
+		return "", "", err
+	}
+	return identityFile, publicKey, nil
+}
+
+func readAgentClipSSHPublicKey(path string) (string, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read AgentClip SSH public key: %w", err)
+	}
+	key := strings.TrimSpace(string(payload))
+	if strings.ContainsAny(key, "\r\n") || !strings.HasPrefix(key, "ssh-ed25519 ") || len(strings.Fields(key)) < 2 {
+		return "", errors.New("invalid AgentClip SSH public key")
+	}
+	return key, nil
+}
+
+func bootstrapSSHKeyCommand(destination, publicKey string) *exec.Cmd {
+	script := strings.Join([]string{
+		"set -eu",
+		"umask 077",
+		"mkdir -p \"$HOME/.ssh\"",
+		"touch \"$HOME/.ssh/authorized_keys\"",
+		"grep -qxF " + shellQuote(publicKey) + " \"$HOME/.ssh/authorized_keys\" || printf '%s\\n' " + shellQuote(publicKey) + " >> \"$HOME/.ssh/authorized_keys\"",
+	}, "; ")
+	return exec.Command("ssh", "-o", "NumberOfPasswordPrompts=1", destination, "sh -lc "+shellQuote(script))
 }
 
 func remoteInstallScript(tag string) string {
@@ -978,12 +1180,19 @@ func shellQuote(value string) string {
 }
 
 func runCompanion(arguments []string) error {
-	if len(arguments) < 2 || len(arguments) > 3 {
-		return errors.New("usage: agentclip companion <start|stop|status|open|view|run|inbox> <profile> | agentclip companion <accept|reject> <profile> <offer-id>")
+	if len(arguments) < 2 || len(arguments) > 4 {
+		return errors.New("usage: agentclip companion <start|stop|status|open|view|run|inbox> <profile> [--verbose] | agentclip companion <accept|reject> <profile> <offer-id>")
+	}
+	verbose := false
+	if len(arguments) == 3 && arguments[2] == "--verbose" && (arguments[0] == "start" || arguments[0] == "run" || arguments[0] == "serve") {
+		verbose = true
+	}
+	if len(arguments) == 4 {
+		return errors.New("unknown Companion option; expected --verbose")
 	}
 	switch arguments[0] {
 	case "start":
-		return startCompanion(arguments[1])
+		return startCompanion(arguments[1], verbose)
 	case "stop":
 		return stopCompanion(arguments[1])
 	case "status":
@@ -991,6 +1200,9 @@ func runCompanion(arguments []string) error {
 	case "open", "view":
 		return openCompanionView(arguments[1])
 	case "run", "serve":
+		if verbose {
+			os.Setenv("AGENTCLIP_LOG_LEVEL", "debug")
+		}
 		return runCompanionService(arguments[1], arguments[0] == "run")
 	case "inbox":
 		return printCompanionInbox(arguments[1])
@@ -1004,7 +1216,7 @@ func runCompanion(arguments []string) error {
 	}
 }
 
-func startCompanion(name string) error {
+func startCompanion(name string, verbose bool) error {
 	if _, err := companion.LoadProfile(name); err != nil {
 		return err
 	}
@@ -1016,6 +1228,9 @@ func startCompanion(name string) error {
 		return fmt.Errorf("locate AgentClip executable: %w", err)
 	}
 	command := exec.Command(executable, "companion", "serve", name)
+	if verbose {
+		command.Env = append(os.Environ(), "AGENTCLIP_LOG_LEVEL=debug")
+	}
 	command.Stdin, command.Stdout, command.Stderr = nil, io.Discard, io.Discard
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start Companion: %w", err)
@@ -1026,7 +1241,7 @@ func startCompanion(name string) error {
 		state, err := companion.LoadRuntime(name)
 		if err == nil && state.PID == pid && companion.RuntimeHealthy(state) {
 			_ = command.Process.Release()
-			fmt.Printf("Companion %q started. Open its view with: agentclip companion open %s\n", name, name)
+			fmt.Printf("Companion %q started. Open: agentclip companion open %s\nLogs: %s\n", name, name, companionLogPath(name))
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -1034,6 +1249,243 @@ func startCompanion(name string) error {
 	_ = command.Process.Kill()
 	_, _ = command.Process.Wait()
 	return errors.New("Companion did not start within the expected time")
+}
+
+func companionLogPath(name string) string {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return filepath.Join("~", ".cache", "agentclip", "logs", name+".log")
+	}
+	return filepath.Join(cacheDir, "agentclip", "logs", name+".log")
+}
+
+func runLogs(arguments []string) error {
+	if len(arguments) < 1 {
+		return errors.New("usage: agentclip logs <profile> [--export caminho]")
+	}
+	settings := flag.NewFlagSet("logs", flag.ContinueOnError)
+	settings.SetOutput(io.Discard)
+	exportPath := settings.String("export", "", "copy the complete log to this file")
+	if err := settings.Parse(arguments[1:]); err != nil {
+		return fmt.Errorf("parse logs options: %w", err)
+	}
+	if settings.NArg() != 0 {
+		return errors.New("usage: agentclip logs <profile> [--export caminho]")
+	}
+	logger, err := companion.NewLogger(arguments[0])
+	if err != nil {
+		return err
+	}
+	defer logger.Close()
+	if *exportPath != "" {
+		if err := logger.Export(*exportPath); err != nil {
+			return err
+		}
+		fmt.Printf("Logs exportados para %s\n", *exportPath)
+		return nil
+	}
+	fmt.Println(logger.Path())
+	return nil
+}
+
+type remoteUpgradeResult struct {
+	Profile string
+	Err     error
+}
+
+// runUpgrade updates every configured server, then atomically replaces the
+// executable that launched this command. A remote failure is reported after
+// every profile has been attempted and does not discard a verified local
+// upgrade.
+func runUpgrade(arguments []string) error {
+	if len(arguments) != 0 {
+		return errors.New("usage: agentclip upgrade")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	checker := release.NewChecker()
+	tag, err := checker.FetchLatest(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve latest AgentClip release: %w", err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate running AgentClip executable: %w", err)
+	}
+	staged, err := upgrader.Prepare(ctx, upgrader.Options{Version: tag, Executable: executable})
+	if err != nil {
+		return fmt.Errorf("prepare AgentClip %s: %w", tag, err)
+	}
+	profiles, err := companion.ListProfiles()
+	if err != nil {
+		staged.Cleanup()
+		return err
+	}
+	// Capture this before remote work starts: only Companions that were healthy
+	// when the upgrade began are eligible for a later restart.
+	active, err := activeCompanions(profiles)
+	if err != nil {
+		staged.Cleanup()
+		return err
+	}
+	results := make([]remoteUpgradeResult, 0, len(profiles))
+	for _, profile := range profiles {
+		fmt.Printf("Updating %q on %s...\n", profile.Name, profile.Destination)
+		err := remoteInstallCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, tag).Run()
+		results = append(results, remoteUpgradeResult{Profile: profile.Name, Err: err})
+	}
+	if err := stopCompanions(active); err != nil {
+		staged.Cleanup()
+		_ = restartCompanions(active)
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		if err := launchWindowsReplacement(staged, active); err != nil {
+			staged.Cleanup()
+			_ = restartCompanions(active)
+			return err
+		}
+		printRemoteUpgradeSummary(results)
+		if hasRemoteUpgradeFailure(results) {
+			return errors.New("one or more remote hosts could not be updated; the local update will finish shortly")
+		}
+		fmt.Printf("AgentClip %s will replace itself and restart %d Companion(s) shortly.\n", tag, len(active))
+		return nil
+	}
+	if err := os.Rename(staged.Path, staged.Target); err != nil {
+		staged.Cleanup()
+		_ = restartCompanions(active)
+		return fmt.Errorf("replace AgentClip executable: %w", err)
+	}
+	if err := restartCompanions(active); err != nil {
+		printRemoteUpgradeSummary(results)
+		return err
+	}
+	printRemoteUpgradeSummary(results)
+	if hasRemoteUpgradeFailure(results) {
+		return errors.New("one or more remote hosts could not be updated")
+	}
+	fmt.Printf("AgentClip updated to %s.\n", tag)
+	return nil
+}
+
+func activeCompanions(profiles []companion.Profile) ([]string, error) {
+	active := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		state, err := companion.LoadRuntime(profile.Name)
+		if err == nil && companion.RuntimeHealthy(state) {
+			active = append(active, profile.Name)
+		}
+	}
+	return active, nil
+}
+
+func stopCompanions(names []string) error {
+	for _, name := range names {
+		state, err := companion.LoadRuntime(name)
+		if err != nil || !companion.RuntimeHealthy(state) {
+			continue
+		}
+		if err := companion.StopRuntime(state); err != nil {
+			return fmt.Errorf("stop active Companion %q: %w", name, err)
+		}
+	}
+	deadline := time.Now().Add(startupTimeout)
+	for time.Now().Before(deadline) {
+		stopped := true
+		for _, name := range names {
+			state, err := companion.LoadRuntime(name)
+			if err == nil && companion.RuntimeHealthy(state) {
+				stopped = false
+				break
+			}
+		}
+		if stopped {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return errors.New("timed out stopping active Companions")
+}
+
+func restartCompanions(names []string) error {
+	var failures []string
+	for _, name := range names {
+		if err := startCompanion(name, false); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+		}
+	}
+	if len(failures) != 0 {
+		return fmt.Errorf("restart Companion(s): %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func printRemoteUpgradeSummary(results []remoteUpgradeResult) {
+	if len(results) == 0 {
+		fmt.Println("No remote profiles configured.")
+		return
+	}
+	fmt.Println("Remote update summary:")
+	for _, result := range results {
+		if result.Err == nil {
+			fmt.Printf("  %s: updated\n", result.Profile)
+		} else {
+			fmt.Printf("  %s: failed (%v)\n", result.Profile, result.Err)
+		}
+	}
+}
+
+func hasRemoteUpgradeFailure(results []remoteUpgradeResult) bool {
+	for _, result := range results {
+		if result.Err != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// launchWindowsReplacement delegates the locked .exe replacement to a fresh
+// PowerShell process. It waits for this upgrade process to exit, swaps the
+// verified staged executable, starts only the previously active Companions,
+// then removes its own script.
+func launchWindowsReplacement(staged upgrader.StagedBinary, companions []string) error {
+	script, err := os.CreateTemp(filepath.Dir(staged.Target), ".agentclip-upgrade-*.ps1")
+	if err != nil {
+		return fmt.Errorf("create Windows upgrade helper: %w", err)
+	}
+	scriptPath := script.Name()
+	profiles, err := json.Marshal(companions)
+	if err == nil {
+		_, err = script.WriteString(windowsReplacementScript())
+	}
+	if closeErr := script.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(scriptPath)
+		return fmt.Errorf("write Windows upgrade helper: %w", err)
+	}
+	command := windowsReplacementCommand(scriptPath, staged, string(profiles), os.Getpid())
+	if err := command.Start(); err != nil {
+		_ = os.Remove(scriptPath)
+		return fmt.Errorf("start Windows upgrade helper: %w", err)
+	}
+	return command.Process.Release()
+}
+
+func windowsReplacementCommand(scriptPath string, staged upgrader.StagedBinary, profiles string, processID int) *exec.Cmd {
+	return exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, "-ProcessId", strconv.Itoa(processID), "-Source", staged.Path, "-Target", staged.Target, "-Profiles", profiles)
+}
+
+func windowsReplacementScript() string {
+	return "param([int]$ProcessId,[string]$Source,[string]$Target,[string]$Profiles)\n" +
+		"$ErrorActionPreference = 'Stop'\n" +
+		"Wait-Process -Id $ProcessId\n" +
+		"Move-Item -Force -LiteralPath $Source -Destination $Target\n" +
+		"$profiles = ConvertFrom-Json $Profiles\n" +
+		"foreach ($profile in @($profiles)) { Start-Process -WindowStyle Hidden -FilePath $Target -ArgumentList @('companion','serve',$profile) }\n" +
+		"Remove-Item -Force -LiteralPath $PSCommandPath\n"
 }
 
 func stopCompanion(name string) error {
@@ -1108,6 +1560,7 @@ type companionDashboardStatus struct {
 	Tunnel      companion.TunnelStatus    `json:"tunnel"`
 	Clipboard   companionClipboardView    `json:"clipboard"`
 	Inbound     bridge.InboundLocalStatus `json:"inbound"`
+	Release     release.Status            `json:"release"`
 }
 
 type companionClipboardView struct {
@@ -1129,8 +1582,15 @@ func runCompanionService(name string, announce bool) error {
 	if err != nil {
 		return err
 	}
+	logger, err := companion.NewLogger(name)
+	if err != nil {
+		return err
+	}
+	defer logger.Close()
+	logger.Info("Companion starting: profile=%s destination=%s", profile.Name, profile.Destination)
 	unlock, err := acquireBridgeLock()
 	if err != nil {
+		logger.Error("bridge unavailable: %v", err)
 		return err
 	}
 	state, started, err := ensureBridge(nil)
@@ -1156,6 +1616,11 @@ func runCompanionService(name string, announce bool) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	serviceStartedAt := time.Now().UTC()
+	var releaseMu sync.RWMutex
+	releaseState := release.Status{CurrentVersion: buildinfo.Version}
+	if err := publishReleaseStatus(state, releaseState); err != nil {
+		logger.Error("publish initial release status: %v", err)
+	}
 	var tunnelMu sync.RWMutex
 	tunnel := companion.TunnelStatus{UpdatedAt: time.Now().UTC()}
 	stop := make(chan struct{}, 1)
@@ -1165,7 +1630,11 @@ func runCompanionService(name string, announce bool) error {
 		tunnelMu.RUnlock()
 		return companionDashboardStatus{
 			Profile: profile.Name, Destination: profile.Destination, StartedAt: serviceStartedAt,
-			Tunnel: currentTunnel, Clipboard: companionClipboardStatus(state, profile.Token), Inbound: companionInboundStatus(state),
+			Tunnel: currentTunnel, Clipboard: companionClipboardStatus(state, profile.Token), Inbound: companionInboundStatus(state), Release: func() release.Status {
+				releaseMu.RLock()
+				defer releaseMu.RUnlock()
+				return releaseState
+			}(),
 		}
 	}, func() {
 		select {
@@ -1176,9 +1645,15 @@ func runCompanionService(name string, announce bool) error {
 		return controlInboundText(state, offerID)
 	})
 	if err != nil {
+		logger.Error("start Companion control server: %v", err)
 		return fmt.Errorf("start Companion control server: %w", err)
 	}
 	defer control.Close()
+	go watchReleaseStatus(ctx, state, logger, func(next release.Status) {
+		releaseMu.Lock()
+		releaseState = next
+		releaseMu.Unlock()
+	})
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
@@ -1188,14 +1663,15 @@ func runCompanionService(name string, announce bool) error {
 		Arm: func(ctx context.Context, items []bridge.Item) error {
 			return controlArmSnapshot(state, items)
 		},
+		Log: logger,
 	}
 	go func() { errors <- watcher.Run(ctx) }()
 	go func() {
-		errors <- companion.RunTunnelWithStatus(ctx, profile, statePort(state), func(status companion.TunnelStatus) {
+		errors <- companion.RunTunnelWithLogger(ctx, profile, statePort(state), func(status companion.TunnelStatus) {
 			tunnelMu.Lock()
 			tunnel = status
 			tunnelMu.Unlock()
-		})
+		}, logger)
 	}()
 	if announce {
 		fmt.Printf("Companion %q is running; SSH normally, then ask your agent to inspect the clipboard.\n", profile.Name)
@@ -1214,6 +1690,11 @@ func runCompanionService(name string, announce bool) error {
 			runErr = err
 		}
 		received++
+	}
+	if runErr != nil {
+		logger.Error("Companion stopped with error: %v", runErr)
+	} else {
+		logger.Info("Companion stopped")
 	}
 	return runErr
 }
@@ -1362,6 +1843,41 @@ func controlSession(state daemon.State) (sessionResponse, error) {
 	return result, controlPost(state, "/v1/control/sessions", nil, &result)
 }
 
+func publishReleaseStatus(state daemon.State, status release.Status) error {
+	payload, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	return controlPost(state, "/v1/control/release", payload, nil)
+}
+
+// watchReleaseStatus checks once after Companion startup and then relies on
+// the shared disk cache to avoid repeated GitHub calls from other Companions.
+func watchReleaseStatus(ctx context.Context, state daemon.State, logger *companion.Logger, set func(release.Status)) {
+	checker := release.NewChecker()
+	refresh := func() {
+		status, err := checker.Current(ctx)
+		if err != nil {
+			logger.Error("release check failed: %v", err)
+		}
+		set(status)
+		if err := publishReleaseStatus(state, status); err != nil {
+			logger.Error("publish release status: %v", err)
+		}
+	}
+	refresh()
+	ticker := time.NewTicker(release.CacheTTL)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
+}
+
 func companionInboundStatus(state daemon.State) bridge.InboundLocalStatus {
 	var result bridge.InboundLocalStatus
 	if err := controlGet(state, "/v1/control/inbound", &result); err != nil {
@@ -1498,5 +2014,5 @@ func randomPort() (int, error) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: agentclip <command>")
-	fmt.Fprintln(os.Stderr, "commands: arm, ssh, pair, setup, connect, uninstall, companion, mcp, harness, doctor, version")
+	fmt.Fprintln(os.Stderr, "commands: arm, ssh, pair, setup, connect, uninstall, companion, logs, mcp, harness, doctor, version")
 }

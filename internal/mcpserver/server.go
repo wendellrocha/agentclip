@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/wendellrocha/agentclip/internal/buildinfo"
+	"github.com/wendellrocha/agentclip/internal/release"
 )
 
 // ClipboardProvider is the bridge-facing interface used by the MCP server.
@@ -22,6 +23,12 @@ type ClipboardProvider interface {
 	HostFileOfferStatus(context.Context, string) (HostFileOffer, error)
 	WaitHostFileOffer(context.Context, string) (HostFileOffer, error)
 	DeliverFileToHost(context.Context, string, string) (HostFileOffer, error)
+}
+
+// UpdateProvider is kept separate from ClipboardProvider so existing custom
+// providers remain source-compatible; the HTTP provider implements it.
+type UpdateProvider interface {
+	UpdateStatus(context.Context) (release.Status, error)
 }
 
 type Status struct {
@@ -104,6 +111,27 @@ var ErrNoProvider = errors.New("image provider is nil")
 // New constructs an MCP server with clipboard_status and get_clipboard_image.
 func New(provider ClipboardProvider) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "agentclip", Version: buildinfo.Version}, nil)
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "agentclip_update_status", Description: "Checks the AgentClip release status. When update_available is true, run `agentclip upgrade` on the host.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		updates, ok := provider.(UpdateProvider)
+		if !ok || provider == nil {
+			return toolError(ErrNoProvider)
+		}
+		status, err := updates.UpdateStatus(ctx)
+		if err != nil {
+			return toolError(err)
+		}
+		result := struct {
+			release.Status
+			UpgradeCommand string `json:"upgrade_command,omitempty"`
+		}{Status: status}
+		if status.UpdateAvailable {
+			result.UpgradeCommand = "agentclip upgrade"
+		}
+		data, _ := json.Marshal(result)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
+	})
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "clipboard_status", Description: "Lists clipboard items available after the user's explicit request. It returns metadata only, never clipboard bytes or host paths.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {

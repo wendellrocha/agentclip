@@ -3,12 +3,18 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/wendellrocha/agentclip/internal/release"
 )
 
 type fakeProvider struct{}
+
+func (fakeProvider) UpdateStatus(context.Context) (release.Status, error) {
+	return release.Status{CurrentVersion: "1.0.0", LatestVersion: "v1.1.0", UpdateAvailable: true}, nil
+}
 
 func (fakeProvider) Status(context.Context) (Status, error) {
 	return Status{Armed: true, Bytes: 3, Remaining: 1}, nil
@@ -78,6 +84,13 @@ func TestToolsThroughInMemoryMCP(t *testing.T) {
 	status, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "clipboard_status", Arguments: map[string]any{}})
 	if err != nil || status.IsError {
 		t.Fatalf("status failed: %v %#v", err, status)
+	}
+	update, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "agentclip_update_status", Arguments: map[string]any{}})
+	if err != nil || update.IsError || len(update.Content) != 1 {
+		t.Fatalf("update failed: %v %#v", err, update)
+	}
+	if text, ok := update.Content[0].(*mcp.TextContent); !ok || !strings.Contains(text.Text, `"upgrade_command":"agentclip upgrade"`) {
+		t.Fatalf("update result = %#v", update.Content)
 	}
 	offer, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "offer_file_to_host", Arguments: map[string]any{"path": "/tmp/report.csv"}})
 	if err != nil || offer.IsError {

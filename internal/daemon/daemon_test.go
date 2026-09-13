@@ -53,6 +53,47 @@ func TestControlEndpointsRequireTokenAndArm(t *testing.T) {
 	}
 }
 
+func TestReleaseControlPublishesAuthenticatedStatusWithoutClipboard(t *testing.T) {
+	d, err := Start(nil, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	baseURL := "http://" + d.State.Address
+	request, _ := http.NewRequest(http.MethodPost, baseURL+"/v1/control/release", strings.NewReader(`{"current_version":"1.0.0","latest_version":"v1.1.0","update_available":true}`))
+	request.Header.Set("Authorization", "Bearer secret")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("publish status = %d", response.StatusCode)
+	}
+	if err := d.Bridge.RegisterPersistentSession("companion", "pair-token"); err != nil {
+		t.Fatal(err)
+	}
+	remote, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/release", nil)
+	remote.Header.Set("Authorization", "Bearer pair-token")
+	response, err = http.DefaultClient.Do(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(readResponse(t, response), `"latest_version":"v1.1.0"`) {
+		t.Fatalf("release response = %d", response.StatusCode)
+	}
+}
+
+func readResponse(t *testing.T, response *http.Response) string {
+	t.Helper()
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
+}
+
 func TestPersistentSessionCanReadLaterImage(t *testing.T) {
 	d, err := Start(nil, "secret")
 	if err != nil {

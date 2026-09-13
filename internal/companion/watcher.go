@@ -14,6 +14,7 @@ type Watcher struct {
 	Reader   clipboard.Reader
 	Interval time.Duration
 	Arm      func(context.Context, clipboard.Image) error
+	Log      *Logger
 }
 
 func (w Watcher) Run(ctx context.Context) error {
@@ -32,8 +33,11 @@ func (w Watcher) Run(ctx context.Context) error {
 	// copied an image should make that image available without a second copy.
 	if image, err := clipboard.Capture(ctx, w.Reader); err == nil {
 		if err := w.Arm(ctx, image); err == nil {
+			w.Log.Debug("clipboard snapshot armed: kind=image size=%d", image.Size)
 			lastHash = image.SHA256
 		}
+	} else {
+		w.Log.Debug("clipboard poll skipped: %v", err)
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -47,8 +51,10 @@ func (w Watcher) Run(ctx context.Context) error {
 				continue
 			}
 			if err := w.Arm(ctx, image); err != nil {
+				w.Log.Error("clipboard snapshot could not be armed: %v", err)
 				continue
 			}
+			w.Log.Debug("clipboard snapshot armed: kind=image size=%d", image.Size)
 			lastHash = image.SHA256
 		}
 	}

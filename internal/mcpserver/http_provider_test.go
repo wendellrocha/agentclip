@@ -28,6 +28,8 @@ func TestHTTPProviderStatusAndImage(t *testing.T) {
 		case "/v1/image":
 			w.Header().Set("Content-Type", "image/png")
 			_, _ = w.Write([]byte{1, 2, 3})
+		case "/v1/release":
+			_, _ = w.Write([]byte(`{"current_version":"1.0.0","latest_version":"v1.1.0","update_available":true}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -48,6 +50,10 @@ func TestHTTPProviderStatusAndImage(t *testing.T) {
 	}
 	if image.MIMEType != "image/png" || string(image.Data) != string([]byte{1, 2, 3}) {
 		t.Fatalf("Image() = %#v", image)
+	}
+	update, err := provider.UpdateStatus(context.Background())
+	if err != nil || !update.UpdateAvailable || update.LatestVersion != "v1.1.0" {
+		t.Fatalf("UpdateStatus() = %#v, %v", update, err)
 	}
 }
 

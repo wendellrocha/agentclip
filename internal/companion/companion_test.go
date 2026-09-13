@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,7 +19,7 @@ import (
 )
 
 func TestSaveAndLoadProfileUsesPrivateConfigFile(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AGENTCLIP_CONFIG_DIR", t.TempDir())
 	want := Profile{Name: "dev", Destination: "dev.example", RemotePort: 39123, Token: "pair-token", CreatedAt: time.Now().UTC().Round(0)}
 	if err := SaveProfile(want); err != nil {
 		t.Fatal(err)
@@ -50,6 +51,26 @@ func TestProfileRejectsUnsafeName(t *testing.T) {
 	}
 }
 
+func TestProfileRejectsRelativeManagedIdentity(t *testing.T) {
+	profile := Profile{Name: "dev", Destination: "dev", RemotePort: 39123, Token: "token", SSHIdentityFile: "keys/dev"}
+	if err := profile.Validate(); err == nil {
+		t.Fatal("expected relative identity file to be rejected")
+	}
+}
+
+func TestListProfilesReturnsPersistedPairings(t *testing.T) {
+	t.Setenv("AGENTCLIP_CONFIG_DIR", t.TempDir())
+	for _, name := range []string{"dev", "prod"} {
+		if err := SaveProfile(Profile{Name: name, Destination: name + ".example", RemotePort: 39123, Token: "token"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profiles, err := ListProfiles()
+	if err != nil || len(profiles) != 2 || profiles[0].Name != "dev" || profiles[1].Name != "prod" {
+		t.Fatalf("profiles = %#v, %v", profiles, err)
+	}
+}
+
 func TestTunnelCommandUsesLoopbackReverseForward(t *testing.T) {
 	command, err := TunnelCommand(Profile{Name: "dev", Destination: "dev", RemotePort: 39123, Token: "token"}, 45678)
 	if err != nil {
@@ -57,6 +78,20 @@ func TestTunnelCommandUsesLoopbackReverseForward(t *testing.T) {
 	}
 	arguments := strings.Join(command.Args, " ")
 	for _, expected := range []string{"-N", "-R 127.0.0.1:39123:127.0.0.1:45678", "ExitOnForwardFailure=yes", "ServerAliveInterval=30"} {
+		if !strings.Contains(arguments, expected) {
+			t.Errorf("command %q does not contain %q", arguments, expected)
+		}
+	}
+}
+
+func TestTunnelCommandUsesManagedIdentityWithoutPrompts(t *testing.T) {
+	identity := filepath.Join(t.TempDir(), "agentclip-key")
+	command, err := TunnelCommand(Profile{Name: "dev", Destination: "dev", RemotePort: 39123, Token: "token", SSHIdentityFile: identity}, 45678)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := strings.Join(command.Args, " ")
+	for _, expected := range []string{"-i " + identity, "IdentitiesOnly=yes", "BatchMode=yes"} {
 		if !strings.Contains(arguments, expected) {
 			t.Errorf("command %q does not contain %q", arguments, expected)
 		}

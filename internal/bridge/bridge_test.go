@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wendellrocha/agentclip/internal/release"
 )
 
 func pngFixture(t *testing.T) []byte {
@@ -78,6 +80,26 @@ func TestInvalidToken(t *testing.T) {
 	w := requestImage(b.Handler(), "wrong")
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d", w.Code)
+	}
+}
+
+func TestReleaseStatusDoesNotRequireAnArmedClipboard(t *testing.T) {
+	b := New(time.Minute)
+	if err := b.RegisterPersistentSession("companion", "pair-token"); err != nil {
+		t.Fatal(err)
+	}
+	b.SetReleaseStatus(release.Status{CurrentVersion: "1.0.0", LatestVersion: "v1.1.0", UpdateAvailable: true, CheckedAt: time.Now().UTC()})
+	request := httptest.NewRequest(http.MethodGet, "/v1/release", nil)
+	request.Header.Set("Authorization", "Bearer pair-token")
+	response := httptest.NewRecorder()
+	b.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"update_available":true`) || strings.Contains(response.Body.String(), "clipboard") {
+		t.Fatalf("release status = %d %s", response.Code, response.Body.String())
+	}
+	unauthorized := httptest.NewRecorder()
+	b.Handler().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/release", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
 	}
 }
 

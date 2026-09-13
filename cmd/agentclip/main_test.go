@@ -3,12 +3,15 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/wendellrocha/agentclip/internal/companion"
+	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
 
 func TestRemotePreflightPassesTheWholeCheckAsOneRemoteCommand(t *testing.T) {
@@ -60,6 +63,88 @@ func TestRemoteInstallCommandPinsTheRequestedRelease(t *testing.T) {
 	script := remoteInstallScript("v0.2.0")
 	if !strings.Contains(script, "https://raw.githubusercontent.com/wendellrocha/agentclip/v0.2.0/scripts/install.sh") || !strings.Contains(script, "--version 'v0.2.0'") {
 		t.Fatalf("remote installer script = %q", script)
+	}
+}
+
+func TestWindowsUpgradeHelperCommandCarriesStagedBinaryAndActiveProfiles(t *testing.T) {
+	staged := upgrader.StagedBinary{Path: `C:\\Temp\\agentclip.new`, Target: `C:\\Tools\\agentclip.exe`}
+	command := windowsReplacementCommand(`C:\\Temp\\upgrade.ps1`, staged, `["dev","prod"]`, 42)
+	arguments := strings.Join(command.Args, " ")
+	for _, expected := range []string{"powershell", "-NoProfile", "-ExecutionPolicy Bypass", "-ProcessId 42", staged.Path, staged.Target, `["dev","prod"]`} {
+		if !strings.Contains(arguments, expected) {
+			t.Fatalf("Windows helper command %q does not contain %q", arguments, expected)
+		}
+	}
+	for _, expected := range []string{"Wait-Process -Id $ProcessId", "Move-Item -Force", "Start-Process -WindowStyle Hidden", "Remove-Item -Force -LiteralPath $PSCommandPath"} {
+		if !strings.Contains(windowsReplacementScript(), expected) {
+			t.Fatalf("Windows helper script does not contain %q", expected)
+		}
+	}
+}
+
+func TestManagedSSHCommandsUseDedicatedIdentityWithoutPrompts(t *testing.T) {
+	identity := filepath.Join(t.TempDir(), "agentclip-key")
+	install := remoteInstallCommandWithIdentity("bastion-m2", identity, "v0.2.0")
+	login := remoteLoginCommandWithIdentity("bastion-m2", identity, "true")
+	for _, command := range []*exec.Cmd{install, login, sshKeyCheckCommand("bastion-m2", identity)} {
+		arguments := strings.Join(command.Args, " ")
+		for _, required := range []string{"-i " + identity, "IdentitiesOnly=yes", "BatchMode=yes", "bastion-m2"} {
+			if !strings.Contains(arguments, required) {
+				t.Fatalf("SSH command %q does not contain %q", arguments, required)
+			}
+		}
+	}
+}
+
+func TestBootstrapSSHKeyCommandIsIdempotentAndLimitsPasswordPrompts(t *testing.T) {
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest agentclip:dev"
+	command := bootstrapSSHKeyCommand("bastion-m2", key)
+	arguments := strings.Join(command.Args, " ")
+	for _, required := range []string{"NumberOfPasswordPrompts=1", "grep -qxF", "authorized_keys", key} {
+		if !strings.Contains(arguments, required) {
+			t.Fatalf("bootstrap command %q does not contain %q", arguments, required)
+		}
+	}
+}
+
+func TestSSHAuthenticationFailureRecognition(t *testing.T) {
+	for _, output := range []string{
+		"Permission denied (publickey,password).",
+		"Authentication failed.",
+		"Received disconnect: Too many authentication failures",
+	} {
+		if !sshAuthenticationFailure([]byte(output)) {
+			t.Fatalf("authentication failure %q was not recognized", output)
+		}
+	}
+	if sshAuthenticationFailure([]byte("ssh: connect to host bastion port 22: Connection refused")) {
+		t.Fatal("network failure must not trigger key bootstrap")
+	}
+}
+
+func TestEnsureAgentClipSSHKeyCreatesPrivateEd25519Key(t *testing.T) {
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen is not available")
+	}
+	t.Setenv("AGENTCLIP_CONFIG_DIR", t.TempDir())
+	identity, publicKey, err := ensureAgentClipSSHKey("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(publicKey, "ssh-ed25519 ") {
+		t.Fatalf("public key = %q", publicKey)
+	}
+	for _, path := range []string{identity, identity + ".pub"} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+			t.Fatalf("key permissions for %s = %o, want 600", path, info.Mode().Perm())
+		}
+	}
+	if secondIdentity, secondPublicKey, err := ensureAgentClipSSHKey("dev"); err != nil || secondIdentity != identity || secondPublicKey != publicKey {
+		t.Fatalf("key reuse = (%q, %q, %v), want existing key", secondIdentity, secondPublicKey, err)
 	}
 }
 

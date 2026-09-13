@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/wendellrocha/agentclip/internal/release"
 )
 
 const (
@@ -125,6 +127,7 @@ type Bridge struct {
 	items    map[string]*armedItem
 	sessions map[string]*Session
 	inbound  map[string]*inboundOffer
+	release  release.Status
 	ttl      time.Duration
 	now      func() time.Time
 }
@@ -340,6 +343,7 @@ func (b *Bridge) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", b.health)
 	mux.HandleFunc("/v1/status", b.status)
+	mux.HandleFunc("/v1/release", b.releaseStatus)
 	mux.HandleFunc("/v1/image", b.imageHandler)
 	mux.HandleFunc("/v1/items/", b.itemHandler)
 	mux.HandleFunc("/v1/inbound/offers", b.inboundOffersHandler)
@@ -348,6 +352,30 @@ func (b *Bridge) Handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// SetReleaseStatus stores the public release state supplied by a Companion.
+// It is independent of an armed clipboard snapshot and is safe for every
+// authenticated persistent session to read.
+func (b *Bridge) SetReleaseStatus(status release.Status) {
+	b.mu.Lock()
+	b.release = status
+	b.mu.Unlock()
+}
+
+func (b *Bridge) releaseStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		b.err(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	if _, code := b.authenticate(r); code != "" {
+		b.err(w, http.StatusUnauthorized, code, "unauthorized")
+		return
+	}
+	b.mu.Lock()
+	status := b.release
+	b.mu.Unlock()
+	b.json(w, status)
 }
 
 func (b *Bridge) health(w http.ResponseWriter, r *http.Request) {

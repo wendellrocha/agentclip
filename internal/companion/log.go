@@ -1,0 +1,94 @@
+package companion
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Logger writes private, human-readable Companion diagnostics. It deliberately
+// records metadata and errors only; clipboard bytes and pairing credentials
+// must never be written here.
+type Logger struct {
+	mu    sync.Mutex
+	file  *os.File
+	path  string
+	debug bool
+}
+
+func NewLogger(profile string) (*Logger, error) {
+	if !validProfileName(profile) {
+		return nil, fmt.Errorf("invalid Companion profile %q", profile)
+	}
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return nil, fmt.Errorf("find AgentClip cache directory: %w", err)
+	}
+	dir = filepath.Join(dir, "agentclip", "logs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("create AgentClip log directory: %w", err)
+	}
+	path := filepath.Join(dir, profile+".log")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("open Companion log: %w", err)
+	}
+	_ = os.Chmod(path, 0600)
+	return &Logger{file: file, path: path, debug: strings.EqualFold(os.Getenv("AGENTCLIP_LOG_LEVEL"), "debug")}, nil
+}
+
+func (l *Logger) Path() string { return l.path }
+
+func (l *Logger) Close() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	return l.file.Close()
+}
+
+func (l *Logger) Info(message string, args ...any)  { l.write("INFO", message, args...) }
+func (l *Logger) Error(message string, args ...any) { l.write("ERROR", message, args...) }
+func (l *Logger) Debug(message string, args ...any) {
+	if l != nil && l.debug {
+		l.write("DEBUG", message, args...)
+	}
+}
+
+func (l *Logger) write(level, message string, args ...any) {
+	if l == nil || l.file == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, _ = fmt.Fprintf(l.file, "%s [%s] %s\n", time.Now().UTC().Format(time.RFC3339Nano), level, fmt.Sprintf(message, args...))
+}
+
+// Export copies the current log to a user-selected file without exposing the
+// live log path to any remote process.
+func (l *Logger) Export(destination string) error {
+	if strings.TrimSpace(destination) == "" {
+		return fmt.Errorf("log export destination is required")
+	}
+	input, err := os.Open(l.path)
+	if err != nil {
+		return fmt.Errorf("read Companion log: %w", err)
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("create log export: %w", err)
+	}
+	if _, err = io.Copy(output, input); err != nil {
+		_ = output.Close()
+		return fmt.Errorf("export Companion log: %w", err)
+	}
+	if err = output.Close(); err != nil {
+		return fmt.Errorf("close log export: %w", err)
+	}
+	_ = os.Chmod(destination, 0600)
+	return nil
+}

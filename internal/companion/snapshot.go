@@ -105,6 +105,7 @@ type SnapshotWatcher struct {
 	Source   SnapshotSource
 	Interval time.Duration
 	Arm      func(context.Context, []bridge.Item) error
+	Log      *Logger
 }
 
 func (w SnapshotWatcher) Run(ctx context.Context) error {
@@ -122,14 +123,22 @@ func (w SnapshotWatcher) Run(ctx context.Context) error {
 	arm := func(fingerprint string) {
 		items, err := w.Source.ReadSnapshot(ctx)
 		if err != nil || len(items) == 0 {
+			if err != nil {
+				w.Log.Debug("clipboard snapshot read skipped: %v", err)
+			}
 			return
 		}
 		if w.Arm(ctx, items) == nil {
+			w.Log.Debug("clipboard snapshot armed: items=%d", len(items))
 			last = fingerprint
+		} else {
+			w.Log.Error("clipboard snapshot could not be armed")
 		}
 	}
 	if fingerprint, err := w.Source.Fingerprint(ctx); err == nil {
 		arm(fingerprint)
+	} else {
+		w.Log.Debug("clipboard fingerprint unavailable: %v", err)
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -140,6 +149,9 @@ func (w SnapshotWatcher) Run(ctx context.Context) error {
 		case <-ticker.C:
 			fingerprint, err := w.Source.Fingerprint(ctx)
 			if err != nil || fingerprint == last {
+				if err != nil {
+					w.Log.Debug("clipboard fingerprint unavailable: %v", err)
+				}
 				continue
 			}
 			arm(fingerprint)

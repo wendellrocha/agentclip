@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/wendellrocha/agentclip/internal/bridge"
+	"github.com/wendellrocha/agentclip/internal/release"
 )
 
 type Image struct {
@@ -85,6 +86,7 @@ func Start(initial *Image, controlToken string) (*Daemon, error) {
 	mux.HandleFunc("/v1/control/snapshot", d.snapshot)
 	mux.HandleFunc("/v1/control/sessions", d.session)
 	mux.HandleFunc("/v1/control/persistent-session", d.persistentSession)
+	mux.HandleFunc("/v1/control/release", d.release)
 	mux.HandleFunc("/v1/control/inbound", d.inbound)
 	mux.HandleFunc("/v1/control/inbound/", d.inboundAction)
 	mux.HandleFunc("/v1/control/shutdown", d.shutdown)
@@ -101,6 +103,24 @@ func Start(initial *Image, controlToken string) (*Daemon, error) {
 	}
 	go func() { _ = d.server.Serve(l) }()
 	return d, nil
+}
+
+func (d *Daemon) release(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var status release.Status
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&status); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if status.CurrentVersion == "" {
+		http.Error(w, "current_version is required", http.StatusBadRequest)
+		return
+	}
+	d.Bridge.SetReleaseStatus(status)
+	writeJSON(w, map[string]bool{"updated": true})
 }
 
 func (d *Daemon) Close() error {

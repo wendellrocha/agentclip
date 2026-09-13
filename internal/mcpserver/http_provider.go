@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wendellrocha/agentclip/internal/release"
 )
 
 const (
@@ -179,6 +181,24 @@ func (p *HTTPProvider) Status(ctx context.Context) (Status, error) {
 	var status Status
 	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
 		return Status{}, fmt.Errorf("decode bridge status: %w", err)
+	}
+	return status, nil
+}
+
+// UpdateStatus is intentionally separate from Status: the bridge permits it
+// even when no clipboard snapshot is armed.
+func (p *HTTPProvider) UpdateStatus(ctx context.Context) (release.Status, error) {
+	response, err := p.request(ctx, "/v1/release")
+	if err != nil {
+		return release.Status{}, err
+	}
+	defer response.Body.Close()
+	if err := responseError(response); err != nil {
+		return release.Status{}, err
+	}
+	var status release.Status
+	if err := json.NewDecoder(io.LimitReader(response.Body, 8*1024)).Decode(&status); err != nil {
+		return release.Status{}, fmt.Errorf("decode release status: %w", err)
 	}
 	return status, nil
 }

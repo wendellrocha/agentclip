@@ -39,6 +39,9 @@ agentclip setup bastion-m2 --profile m2
 O comando instala a versão compatível no servidor Linux/macOS via SSH, detecta
 todos os harnesses suportados já instalados, registra automaticamente a
 integração AgentClip em cada um deles, cria o perfil local e inicia o Companion.
+Quando o SSH ainda aceita apenas senha, o `setup` pede essa senha uma vez para
+instalar uma chave Ed25519 privada do AgentClip; os túneis seguintes não pedem
+senha. Se uma chave SSH já autentica o destino, o AgentClip não a altera.
 Em seguida:
 
 ```bash
@@ -85,6 +88,17 @@ agentclip companion status m2
 agentclip companion open m2
 agentclip companion stop m2
 ```
+
+O Companion verifica a release estável no início e mostra um aviso na página
+local e na ferramenta MCP `agentclip_update_status` quando houver atualização.
+Para atualizar o executável local e todos os perfis remotos salvos, use:
+
+```bash
+agentclip upgrade
+```
+
+O comando valida o SHA-256 publicado, mantém parados os perfis que já estavam
+parados e reinicia somente os Companions que estavam ativos.
 
 `agentclip companion open m2` abre uma página web local, protegida por token,
 com estado do túnel, itens e expiração do clipboard, último erro e um botão

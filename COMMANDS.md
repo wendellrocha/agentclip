@@ -40,6 +40,13 @@ configura os harnesses já instalados e, por padrão, inicia o Companion local.
 - `--skip-install`: não instala ou atualiza o binário remoto.
 - `--no-start`: conclui a configuração sem iniciar o Companion.
 
+Antes das etapas remotas, `setup` testa uma autenticação SSH por chave sem
+interação. Se ela funcionar, preserva a configuração existente. Se o destino
+aceitar somente senha, gera uma chave Ed25519 privada do AgentClip, pede a
+senha uma vez para adicioná-la ao `authorized_keys` remoto e usa essa chave nos
+túneis seguintes. A chave local fica em `os.UserConfigDir()/agentclip/keys/`
+com permissões privadas; `pair` não executa esse bootstrap.
+
 Executar `setup` outra vez para o mesmo perfil gera um novo token de
 pareamento e para o Companion anterior, caso esteja em execução.
 
@@ -99,6 +106,25 @@ Gerencia a parte local persistente do AgentClip.
 - `accept` e `reject`: aprovam ou recusam uma oferta pendente sem abrir o
   navegador. O ID aparece em `inbox`, `status` ou na página web.
 
+### `upgrade`
+
+```text
+agentclip upgrade
+```
+
+Baixa a release estável mais recente para a plataforma local, confere o
+SHA-256 publicado em `checksums.txt` e substitui o executável que está em uso.
+Também atualiza todos os destinos dos perfis salvos, usando a identidade SSH
+gerenciada pelo perfil quando houver. Uma falha em um servidor não impede as
+tentativas nos demais nem a atualização local; o resumo final identifica cada
+perfil que falhou.
+
+Antes da troca local, o comando registra e para os Companions saudáveis. Após
+a troca, reinicia somente esses perfis; um Companion que já estava parado
+permanece parado. Em Windows, a troca é concluída por um pequeno processo
+PowerShell depois que o comando termina, porque o `.exe` em execução fica
+bloqueado pelo sistema.
+
 ### Página web do Companion
 
 `agentclip companion open m2` abre uma página local protegida por uma URL com
@@ -110,6 +136,7 @@ A página atualiza a cada dois segundos e mostra:
 - perfil e destino SSH;
 - estado do túnel (`Conectado` ou `Desconectado`) e o último erro, quando há;
 - clipboard armado, quantidade, nomes/tipos dos itens e horário de expiração;
+- aviso de release estável nova, com a versão e `agentclip upgrade`;
 - botão **Parar Companion**, equivalente ao comando `companion stop`.
 
 Ela é uma visão operacional; não transfere o conteúdo do clipboard ao
@@ -145,6 +172,30 @@ agentclip doctor
 Verifica se há um bridge local saudável e informa endereço e PID. Para o fluxo
 com Companion, prefira `agentclip companion status <perfil>`, que também inclui
 o estado do túnel e do clipboard.
+
+### `logs`
+
+```text
+agentclip logs <profile>
+agentclip logs <profile> --export caminho/agentclip.log
+```
+
+Mostra o caminho do log privado do Companion ou exporta uma cópia completa
+para o caminho informado. Para coletar detalhes adicionais durante a
+reprodução de um problema, reinicie o perfil com:
+
+```text
+agentclip companion stop <profile>
+agentclip companion start <profile> --verbose
+```
+
+O modo verbose registra eventos de clipboard e do túnel SSH, além de mensagens
+de erro. Ele não registra tokens, bytes nem o conteúdo do clipboard.
+
+O Companion consulta a release estável no início e no máximo uma vez a cada 24
+horas, compartilhando um cache privado entre perfis. O status também está na
+ferramenta MCP `agentclip_update_status`; ela nunca exige que o clipboard esteja
+armado e recomenda `agentclip upgrade` quando necessário.
 
 ### `version`
 
