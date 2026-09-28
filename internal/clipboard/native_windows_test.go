@@ -42,3 +42,7 @@ func nativeSetFiles(t *testing.T, paths ...string) {
 	}
 	powershell(t, `Set-Clipboard -Path `+strings.Join(quoted, ","))
 }
+
+// nativeSetTextExclusive: this platform's clipboard only offers the formats
+// that were written, so plain text is already exclusive.
+func nativeSetTextExclusive(t *testing.T, text string) { nativeSetText(t, text) }

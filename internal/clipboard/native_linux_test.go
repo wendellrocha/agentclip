@@ -1,11 +1,14 @@
 package clipboard
 
 import (
+	"context"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+
+	native "golang.design/x/clipboard"
 )
 
 // xclip forks into the background to own the selection, so its output must not
@@ -49,4 +52,19 @@ func nativeSetFiles(t *testing.T, paths ...string) {
 		list.WriteString((&url.URL{Scheme: "file", Path: path}).String() + "\r\n")
 	}
 	xclipCopy(t, "text/uri-list", strings.NewReader(list.String()), "")
+}
+
+// nativeSetTextExclusive owns the selection through the package under test,
+// which refuses targets it does not advertise. xclip instead serves its data
+// for any requested target, so an image request would wrongly get the text.
+func nativeSetTextExclusive(t *testing.T, text string) {
+	t.Helper()
+	if os.Getenv("DISPLAY") == "" {
+		t.Skip("DISPLAY is not set; run under an X server, for example xvfb-run -a")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if _, err := native.Write(ctx, native.FmtText, []byte(text)); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
 }
