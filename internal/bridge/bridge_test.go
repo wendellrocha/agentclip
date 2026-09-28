@@ -434,3 +434,83 @@ func TestSecurityEventsAreLoggedWithoutSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectionLogsAreRateLimitedAndSummarized(t *testing.T) {
+	b := New(time.Minute)
+	logger := &recordingLogger{}
+	b.SetLogger(logger)
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	b.now = func() time.Time { return now }
+
+	reject := func() {
+		request := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+		request.Header.Set("Authorization", "Bearer nope")
+		b.Handler().ServeHTTP(httptest.NewRecorder(), request)
+	}
+	for i := 0; i < 100; i++ {
+		reject()
+	}
+	if got := len(logger.events); got != rejectionLogBurst {
+		t.Fatalf("logged %d rejections within a window, want %d", got, rejectionLogBurst)
+	}
+
+	now = now.Add(rejectionLogWindow)
+	reject()
+	joined := strings.Join(logger.events, "\n")
+	if !strings.Contains(joined, "request rejections suppressed: code=UNAUTHORIZED count=95") {
+		t.Fatalf("missing suppression summary in:\n%s", joined)
+	}
+}
+
+func TestLogValuesCannotForgeLines(t *testing.T) {
+	b := New(time.Minute)
+	logger := &recordingLogger{}
+	b.SetLogger(logger)
+	b.logEvent("value=%s", "a\nfake [INFO] line\r")
+	if len(logger.events) != 1 || strings.ContainsAny(logger.events[0], "\r\n") {
+		t.Fatalf("events = %q", logger.events)
+	}
+}
+
+func TestFailedInboundDeliveryDoesNotLeakHostPaths(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Setenv("HOME", cache)
+	t.Setenv("LocalAppData", cache)
+	root, err := os.UserCacheDir()
+	if err != nil {
+		t.Skip("no user cache directory on this platform")
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// A regular file where the AgentClip cache directory belongs makes the
+	// write fail with an error that embeds the full host path.
+	if err := os.WriteFile(filepath.Join(root, "agentclip"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	b := New(time.Minute)
+	logger := &recordingLogger{}
+	b.SetLogger(logger)
+	if err := b.RegisterPersistentSessionWithUpload("companion:dev", "read-token", "upload-token"); err != nil {
+		t.Fatal(err)
+	}
+	emptyHash := sha256.Sum256(nil)
+	offer, err := b.CreateInboundOffer("companion:dev", "secret-report.csv", 0, hex.EncodeToString(emptyHash[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.AcceptInboundOffer(offer.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = b.DeliverInboundOffer("companion:dev", offer.ID, strings.NewReader(""), 0)
+	if err == nil {
+		t.Fatal("delivery into an unusable cache directory must fail")
+	}
+	for _, text := range []string{err.Error(), strings.Join(logger.events, "\n")} {
+		if strings.Contains(text, root) || strings.Contains(text, "secret-report.csv") {
+			t.Fatalf("host path or filename leaked: %s", text)
+		}
+	}
+}
