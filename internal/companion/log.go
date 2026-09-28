@@ -86,18 +86,19 @@ func (l *Logger) write(level, message string, args ...any) {
 
 var lineEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`)
 
-// rotateLocked moves the full log to <path>.1 and starts a fresh file. If
-// rotation fails, logging continues on the current file rather than dropping
-// diagnostics.
+// rotateLocked moves the full log to <path>.1 and starts a fresh file. The
+// file is closed first because Windows cannot rename an open file. If the
+// rename still fails, the log is truncated instead, so it stays bounded.
 func (l *Logger) rotateLocked() {
+	_ = l.file.Close()
+	flags := os.O_CREATE | os.O_APPEND | os.O_WRONLY
 	if err := os.Rename(l.path, l.path+".1"); err != nil {
-		return
+		flags |= os.O_TRUNC
 	}
-	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	file, err := os.OpenFile(l.path, flags, 0600)
 	if err != nil {
 		return
 	}
-	_ = l.file.Close()
 	l.file, l.size = file, 0
 }
 
