@@ -88,6 +88,19 @@ que ainda estiver rodando tentará abrir novamente o mesmo túnel reverso.
    `materialize_clipboard_files`. O arquivo aparecerá em
    `~/.cache/agentclip/inbox/` no servidor.
 
+## Estrutura do código
+
+- `cmd/agentclip`: CLI e orquestração dos comandos.
+- `internal/bridge`, `internal/daemon`: bridge HTTP local, sessões, itens do
+  clipboard e inbox de arquivos recebidos.
+- `internal/companion`: perfis, túnel SSH, servidor de controle e página web.
+- `internal/mcpserver`: servidor MCP por `stdio` e cliente HTTP do bridge.
+- `internal/agents`: adaptadores que registram o MCP em cada agente remoto.
+- `internal/harness`: configuração local de AGY, OpenCode e Pi (inclui o
+  template da extensão Pi).
+- `internal/remote`: comandos SSH de preflight, instalação e chave dedicada.
+- `internal/release`, `internal/upgrader`: consulta de releases e atualização.
+
 ## Releases
 
 Uma tag semântica `vX.Y.Z` dispara os workflows de teste e release. A release
