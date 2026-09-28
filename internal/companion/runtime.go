@@ -161,7 +161,8 @@ func writePrivateJSON(path, temporaryPrefix string, value any) error {
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0600); err == nil {
+	err = temporary.Chmod(0600)
+	if err == nil {
 		_, err = temporary.Write(payload)
 	}
 	if closeErr := temporary.Close(); err == nil {
