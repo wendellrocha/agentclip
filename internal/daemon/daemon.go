@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -151,22 +152,22 @@ func LoadState() (State, error) {
 
 func (d *Daemon) arm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", 405)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req armRequest
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, bridge.MaxImageBytes*2)).Decode(&req) != nil {
-		http.Error(w, "invalid json", 400)
+		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 	png, err := base64.StdEncoding.DecodeString(req.PNG)
 	if err != nil {
-		http.Error(w, "png must be base64", 400)
+		http.Error(w, "png must be base64", http.StatusBadRequest)
 		return
 	}
 	im, err := d.Bridge.Arm(png, req.Width, req.Height)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]any{"id": im.ID, "expires_at": im.ExpiresAt})
@@ -203,12 +204,12 @@ func (d *Daemon) snapshot(w http.ResponseWriter, r *http.Request) {
 }
 func (d *Daemon) session(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", 405)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	s, t, err := d.Bridge.CreateSession(0)
 	if err != nil {
-		http.Error(w, err.Error(), 409)
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	writeJSON(w, map[string]any{"id": s.ID, "token": t, "expires_at": s.ExpiresAt})
@@ -295,8 +296,8 @@ func (d *Daemon) shutdown(w http.ResponseWriter, r *http.Request) {
 func authControl(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1/control/") {
-			if r.Header.Get("Authorization") != "Bearer "+token {
-				http.Error(w, "unauthorized", 401)
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 		}

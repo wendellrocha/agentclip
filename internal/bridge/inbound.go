@@ -19,6 +19,9 @@ const (
 	InboundOfferTTL        = 10 * time.Minute
 	InboundRetention       = 30 * time.Minute
 	InboundTransferTimeout = 2 * time.Minute
+	// MaxOpenInboundOffers bounds the offers a single profile can keep
+	// pending, accepted or receiving, so a remote agent cannot grow memory.
+	MaxOpenInboundOffers = 10
 )
 
 type InboundState string
@@ -153,9 +156,14 @@ func (b *Bridge) CreateInboundOffer(sessionID, name string, size int64, checksum
 	if session := b.sessions[sessionID]; session == nil || !session.HasUploadToken || !session.Persistent || session.Revoked {
 		return InboundOffer{}, errors.New("inbound upload session is unavailable")
 	}
+	profile := inboundProfile(sessionID)
+	if b.openInboundOffersLocked(profile) >= MaxOpenInboundOffers {
+		return InboundOffer{}, errors.New("too many open inbound offers")
+	}
 	now := b.now()
-	offer := &inboundOffer{InboundOffer: InboundOffer{ID: randomID(), Name: filepath.Base(name), Size: size, SHA256: strings.ToLower(checksum), State: InboundPending, CreatedAt: now, ExpiresAt: now.Add(InboundOfferTTL)}, profile: inboundProfile(sessionID)}
+	offer := &inboundOffer{InboundOffer: InboundOffer{ID: randomID(), Name: filepath.Base(name), Size: size, SHA256: strings.ToLower(checksum), State: InboundPending, CreatedAt: now, ExpiresAt: now.Add(InboundOfferTTL)}, profile: profile}
 	b.inbound[offer.ID] = offer
+	b.logLocked("inbound offer created: id=%s size=%d", offer.ID, size)
 	return offer.InboundOffer, nil
 }
 
@@ -190,6 +198,7 @@ func (b *Bridge) setInboundOfferState(offerID string, target InboundState) (Inbo
 		return InboundOffer{}, fmt.Errorf("inbound offer is %s", offer.State)
 	}
 	offer.State = target
+	b.logLocked("inbound offer %s: id=%s", target, offer.ID)
 	return offer.InboundOffer, nil
 }
 
@@ -307,16 +316,42 @@ func (b *Bridge) DeliverInboundOffer(sessionID, offerID string, body io.Reader, 
 	}
 	if err != nil {
 		current.State = InboundFailed
+		b.logLocked("inbound delivery failed: id=%s reason=%v", offerID, err)
 		return InboundOffer{}, err
 	}
 	current.State, current.path, current.deliveredAt = InboundDelivered, path, b.now()
+	b.logLocked("inbound offer delivered: id=%s size=%d", offerID, current.Size)
 	return current.InboundOffer, nil
+}
+
+func (b *Bridge) openInboundOffersLocked(profile string) int {
+	open := 0
+	for _, offer := range b.inbound {
+		if offer.profile != profile {
+			continue
+		}
+		switch offer.State {
+		case InboundPending, InboundAccepted, InboundReceiving:
+			open++
+		}
+	}
+	return open
 }
 
 func (b *Bridge) pruneInboundLocked(now time.Time) {
 	for id, offer := range b.inbound {
 		if (offer.State == InboundPending || offer.State == InboundAccepted) && !now.Before(offer.ExpiresAt) {
 			offer.State = InboundExpired
+			b.logLocked("inbound offer expired: id=%s", id)
+		}
+		switch offer.State {
+		case InboundRejected, InboundExpired, InboundFailed:
+			// Offers that never delivered a file hold no data; drop them once
+			// the retention window after their expiry has passed.
+			if !now.Before(offer.ExpiresAt.Add(InboundRetention)) {
+				delete(b.inbound, id)
+				continue
+			}
 		}
 		if offer.State == InboundDelivered && !now.Before(offer.deliveredAt.Add(InboundRetention)) {
 			_ = os.RemoveAll(filepath.Dir(offer.path))
