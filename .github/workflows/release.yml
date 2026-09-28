@@ -75,7 +75,7 @@ jobs:
           build darwin amd64 "" tar.gz
           build darwin arm64 "" tar.gz
           build windows amd64 .exe zip
-          (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
+          (cd dist && sha256sum -- *.tar.gz *.zip > checksums.txt)
 
       - name: Generate release notes
         shell: bash

@@ -37,6 +37,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Test with race detector
+        shell: bash
         run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: Coverage floor
