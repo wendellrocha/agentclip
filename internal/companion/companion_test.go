@@ -153,3 +153,35 @@ func pngFixture(t *testing.T, fill color.RGBA) []byte {
 	}
 	return output.Bytes()
 }
+
+func TestLoggerRotatesAndKeepsOneLinePerEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.log")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := &Logger{file: file, path: path, maxBytes: 512}
+	defer logger.Close()
+
+	for i := 0; i < 50; i++ {
+		logger.Info("event %d value=%s", i, "line\nforged [ERROR] entry")
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.ReadFile(path + ".1")
+	if err != nil {
+		t.Fatalf("rotated log missing: %v", err)
+	}
+	if len(current) > 512 || len(previous) > 512 {
+		t.Fatalf("log sizes %d/%d exceed the 512 byte bound", len(current), len(previous))
+	}
+	for _, chunk := range [][]byte{current, previous} {
+		for _, line := range strings.Split(strings.TrimSpace(string(chunk)), "\n") {
+			if !strings.Contains(line, " [INFO] event ") {
+				t.Fatalf("forged or malformed line: %q", line)
+			}
+		}
+	}
+}

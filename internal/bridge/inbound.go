@@ -144,6 +144,10 @@ func (b *Bridge) inboundOfferHandler(w http.ResponseWriter, r *http.Request) {
 var (
 	errOfferNotFound    = errors.New("inbound offer not found")
 	errApprovalRequired = errors.New("local approval is required before upload")
+	// errInboundVerification marks size or hash mismatches, which are safe to
+	// report to the remote agent. Any other failure may embed host paths.
+	errInboundVerification = errors.New("inbound upload hash verification failed")
+	errInboundStorage      = errors.New("inbound delivery failed on the host")
 )
 
 func (b *Bridge) CreateInboundOffer(sessionID, name string, size int64, checksum string) (InboundOffer, error) {
@@ -316,7 +320,13 @@ func (b *Bridge) DeliverInboundOffer(sessionID, offerID string, body io.Reader, 
 	}
 	if err != nil {
 		current.State = InboundFailed
-		b.logLocked("inbound delivery failed: id=%s reason=%v", offerID, err)
+		reason := "storage or transfer error"
+		if errors.Is(err, errInboundVerification) {
+			reason = "verification failed"
+		} else {
+			err = errInboundStorage
+		}
+		b.logLocked("inbound delivery failed: id=%s reason=%s", offerID, reason)
 		return InboundOffer{}, err
 	}
 	current.State, current.path, current.deliveredAt = InboundDelivered, path, b.now()
@@ -392,7 +402,7 @@ func writeInboundFile(profile, offerID, name string, size int64, checksum string
 		return "", closeErr
 	}
 	if written != size || hex.EncodeToString(hash.Sum(nil)) != checksum {
-		return "", errors.New("inbound upload hash verification failed")
+		return "", errInboundVerification
 	}
 	path := filepath.Join(directory, name)
 	if err := os.Rename(temporaryPath, path); err != nil {

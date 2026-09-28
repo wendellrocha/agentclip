@@ -129,22 +129,25 @@ type Logger interface {
 }
 
 type Bridge struct {
-	mu       sync.Mutex
-	logger   Logger
-	snapshot *Snapshot
-	items    map[string]*armedItem
-	sessions map[string]*Session
-	inbound  map[string]*inboundOffer
-	release  release.Status
-	ttl      time.Duration
-	now      func() time.Time
+	mu     sync.Mutex
+	logger Logger
+	// rejections rate-limits rejection logs per error code so unauthenticated
+	// traffic cannot grow the log without bound.
+	rejections map[string]*rejectionWindow
+	snapshot   *Snapshot
+	items      map[string]*armedItem
+	sessions   map[string]*Session
+	inbound    map[string]*inboundOffer
+	release    release.Status
+	ttl        time.Duration
+	now        func() time.Time
 }
 
 func New(ttl time.Duration) *Bridge {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	return &Bridge{items: make(map[string]*armedItem), sessions: make(map[string]*Session), inbound: make(map[string]*inboundOffer), ttl: ttl, now: time.Now}
+	return &Bridge{items: make(map[string]*armedItem), sessions: make(map[string]*Session), inbound: make(map[string]*inboundOffer), rejections: make(map[string]*rejectionWindow), ttl: ttl, now: time.Now}
 }
 
 // Arm preserves the image-only local API while creating a generic snapshot.
@@ -667,13 +670,69 @@ func (b *Bridge) logEvent(message string, args ...any) {
 }
 
 func (b *Bridge) logLocked(message string, args ...any) {
-	if b.logger != nil {
-		b.logger.Info(message, args...)
+	if b.logger == nil {
+		return
 	}
+	for i, arg := range args {
+		if text, ok := arg.(string); ok {
+			args[i] = sanitizeLogValue(text)
+		}
+	}
+	b.logger.Info(message, args...)
+}
+
+// sanitizeLogValue keeps request-derived text from forging extra log lines.
+func sanitizeLogValue(value string) string {
+	return logValueEscaper.Replace(value)
+}
+
+var logValueEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`)
+
+const (
+	rejectionLogWindow = time.Minute
+	// rejectionLogBurst is how many rejections per code are logged in each
+	// window; the rest are counted and summarized when the window rolls over.
+	rejectionLogBurst = 5
+	maxRejectionCodes = 64
+)
+
+type rejectionWindow struct {
+	start      time.Time
+	logged     int
+	suppressed int
+}
+
+func (b *Bridge) logRejection(status int, code string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.logger == nil {
+		return
+	}
+	if _, known := b.rejections[code]; !known && len(b.rejections) >= maxRejectionCodes {
+		code = "OTHER"
+	}
+	window := b.rejections[code]
+	if window == nil {
+		window = &rejectionWindow{}
+		b.rejections[code] = window
+	}
+	now := b.now()
+	if now.Sub(window.start) >= rejectionLogWindow {
+		if window.suppressed > 0 {
+			b.logLocked("request rejections suppressed: code=%s count=%d", code, window.suppressed)
+		}
+		*window = rejectionWindow{start: now}
+	}
+	if window.logged >= rejectionLogBurst {
+		window.suppressed++
+		return
+	}
+	window.logged++
+	b.logLocked("request rejected: status=%d code=%s", status, code)
 }
 
 func (b *Bridge) err(w http.ResponseWriter, status int, code, msg string) {
-	b.logEvent("request rejected: status=%d code=%s", status, code)
+	b.logRejection(status, code)
 	b.jsonStatus(w, status, ErrorResponse{Code: code, Message: msg})
 }
 

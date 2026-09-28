@@ -166,4 +166,4 @@ jobs:
           go-version-file: go.mod
 
       - name: Actionlint
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@latest
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12

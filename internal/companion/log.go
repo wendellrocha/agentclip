@@ -14,11 +14,16 @@ import (
 // records metadata and errors only; clipboard bytes and pairing credentials
 // must never be written here.
 type Logger struct {
-	mu    sync.Mutex
-	file  *os.File
-	path  string
-	debug bool
+	mu       sync.Mutex
+	file     *os.File
+	path     string
+	debug    bool
+	size     int64
+	maxBytes int64
 }
+
+// maxLogBytes bounds the live log; one previous generation is kept as .1.
+const maxLogBytes = 5 << 20
 
 func NewLogger(profile string) (*Logger, error) {
 	if !validProfileName(profile) {
@@ -38,7 +43,11 @@ func NewLogger(profile string) (*Logger, error) {
 		return nil, fmt.Errorf("open Companion log: %w", err)
 	}
 	_ = os.Chmod(path, 0600)
-	return &Logger{file: file, path: path, debug: strings.EqualFold(os.Getenv("AGENTCLIP_LOG_LEVEL"), "debug")}, nil
+	var size int64
+	if info, err := file.Stat(); err == nil {
+		size = info.Size()
+	}
+	return &Logger{file: file, path: path, size: size, maxBytes: maxLogBytes, debug: strings.EqualFold(os.Getenv("AGENTCLIP_LOG_LEVEL"), "debug")}, nil
 }
 
 func (l *Logger) Path() string { return l.path }
@@ -62,9 +71,34 @@ func (l *Logger) write(level, message string, args ...any) {
 	if l == nil || l.file == nil {
 		return
 	}
+	// One event is one line: escape newlines so values derived from requests
+	// cannot forge additional entries.
+	text := lineEscaper.Replace(fmt.Sprintf(message, args...))
+	line := fmt.Sprintf("%s [%s] %s\n", time.Now().UTC().Format(time.RFC3339Nano), level, text)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_, _ = fmt.Fprintf(l.file, "%s [%s] %s\n", time.Now().UTC().Format(time.RFC3339Nano), level, fmt.Sprintf(message, args...))
+	if l.maxBytes > 0 && l.size+int64(len(line)) > l.maxBytes {
+		l.rotateLocked()
+	}
+	n, _ := l.file.WriteString(line)
+	l.size += int64(n)
+}
+
+var lineEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`)
+
+// rotateLocked moves the full log to <path>.1 and starts a fresh file. If
+// rotation fails, logging continues on the current file rather than dropping
+// diagnostics.
+func (l *Logger) rotateLocked() {
+	if err := os.Rename(l.path, l.path+".1"); err != nil {
+		return
+	}
+	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	_ = l.file.Close()
+	l.file, l.size = file, 0
 }
 
 // Export copies the current log to a user-selected file without exposing the
