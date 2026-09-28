@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -78,6 +80,21 @@ jobs:
           build windows amd64 .exe zip
           (cd dist && sha256sum -- *.tar.gz *.zip > checksums.txt)
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      # Keyless signature: the certificate binds the bundle to this workflow.
+      - name: Sign checksums
+        run: cosign sign-blob --yes --bundle dist/checksums.txt.bundle dist/checksums.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+
       - name: Generate release notes
         shell: bash
         env:
@@ -116,5 +133,6 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/checksums.txt
+            dist/checksums.txt.bundle
             scripts/install.sh
             scripts/install.ps1

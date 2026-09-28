@@ -28,6 +28,27 @@ versão específica, use `--version vX.Y.Z` no instalador POSIX ou
 `-Version vX.Y.Z` no PowerShell. Os artefatos e checksums também estão nas
 [GitHub Releases](https://github.com/wendellrocha/agentclip/releases).
 
+### Verificar a autenticidade de um release
+
+O `checksums.txt` de cada release é assinado com o
+[cosign](https://github.com/sigstore/cosign) (assinatura keyless pela identidade
+do workflow de release), e os artefatos têm atestado de proveniência do GitHub.
+Para verificar manualmente, baixe o arquivo do release, o `checksums.txt` e o
+`checksums.txt.bundle`:
+
+```bash
+cosign verify-blob \
+  --bundle checksums.txt.bundle \
+  --certificate-identity-regexp '^https://github.com/wendellrocha/agentclip/\.github/workflows/release\.yml@refs/(tags|heads)/.+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum --check --ignore-missing checksums.txt
+gh attestation verify agentclip_vX.Y.Z_linux_amd64.tar.gz --repo wendellrocha/agentclip
+```
+
+Os instaladores e o `agentclip upgrade` verificam apenas o SHA-256; a
+verificação da assinatura é um passo manual.
+
 ## Início rápido
 
 Instale e configure o servidor em uma única chamada:
@@ -187,6 +208,7 @@ instalados; `--agent` permite escolher um deles.
   do Companion e comandos internos.
 - [Desenvolvimento](DEVELOPMENT.md): build local, testes, validação de CSV e
   processo de release.
+- [Segurança](SECURITY.md): como reportar vulnerabilidades e verificar releases.
 - [Contribuindo](CONTRIBUTING.md): escopo de contribuições, testes e pull
   requests.
 

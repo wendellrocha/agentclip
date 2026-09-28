@@ -92,7 +92,8 @@ que ainda estiver rodando tentará abrir novamente o mesmo túnel reverso.
 
 Uma tag semântica `vX.Y.Z` dispara os workflows de teste e release. A release
 publica binários para Linux `amd64`/`arm64`, macOS `amd64`/`arm64` e Windows
-`amd64`, além de checksums e instaladores.
+`amd64`, além de checksums (assinados com cosign, `checksums.txt.bundle`),
+atestado de proveniência e instaladores.
 
 ```bash
 git tag -a vX.Y.Z -m "Release vX.Y.Z"
