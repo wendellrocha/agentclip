@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/wendellrocha/agentclip/internal/agents"
 	"github.com/wendellrocha/agentclip/internal/bridge"
 	"github.com/wendellrocha/agentclip/internal/buildinfo"
 	"github.com/wendellrocha/agentclip/internal/clipboard"
@@ -351,11 +352,11 @@ func runConnect(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	adapters, err := configureRemoteAgents(profile, *agent)
+	adapters, err := agents.Configure(profile, *agent)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Connected %s to profile %q.\n", displayAgents(adapters), profile.Name)
+	fmt.Printf("Connected %s to profile %q.\n", agents.Display(adapters), profile.Name)
 	return nil
 }
 
@@ -376,14 +377,14 @@ func runUninstall(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	adapter, err := resolveAgentAdapter(*agent)
+	adapter, err := agents.Resolve(*agent)
 	if err != nil {
 		return err
 	}
-	if err := remote.LoginForProfile(profile, adapter.removeArguments("agentclip-"+profile.Name)...).Run(); err != nil {
-		return fmt.Errorf("remove AgentClip MCP from %s on %s: %w", adapter.displayName, profile.Destination, err)
+	if err := remote.LoginForProfile(profile, adapter.RemoveArguments("agentclip-"+profile.Name)...).Run(); err != nil {
+		return fmt.Errorf("remove AgentClip MCP from %s on %s: %w", adapter.DisplayName, profile.Destination, err)
 	}
-	fmt.Printf("Removed the AgentClip MCP entry from %s for profile %q. The harness remains installed.\n", adapter.displayName, profile.Name)
+	fmt.Printf("Removed the AgentClip MCP entry from %s for profile %q. The harness remains installed.\n", adapter.DisplayName, profile.Name)
 	return nil
 }
 
@@ -408,11 +409,11 @@ func pairProfileWithIdentity(name, destination string, remotePort int, agent str
 		return companion.Profile{}, err
 	}
 	if !skipAgent {
-		adapters, err := configureRemoteAgents(profile, agent)
+		adapters, err := agents.Configure(profile, agent)
 		if err != nil {
 			return companion.Profile{}, err
 		}
-		fmt.Printf("Configured %s on %s.\n", displayAgents(adapters), profile.Destination)
+		fmt.Printf("Configured %s on %s.\n", agents.Display(adapters), profile.Destination)
 	}
 	if err := companion.SaveProfile(profile); err != nil {
 		return companion.Profile{}, err
@@ -460,162 +461,6 @@ func defaultProfileName(destination string) string {
 		name = name[:64]
 	}
 	return name
-}
-
-type agentAdapter struct {
-	id              string
-	displayName     string
-	executable      string
-	addArguments    func(companion.Profile, string) []string
-	removeArguments func(string) []string
-}
-
-func configureRemoteAgents(profile companion.Profile, selection string) ([]agentAdapter, error) {
-	if strings.HasPrefix(profile.Destination, "-") {
-		return nil, errors.New("SSH destination must not start with a dash")
-	}
-	if strings.EqualFold(strings.TrimSpace(selection), "all") {
-		return configureAllRemoteAgents(profile)
-	}
-	adapter, err := resolveAgentAdapter(selection)
-	if err != nil {
-		return nil, err
-	}
-	if err := remote.PreflightForProfile(profile, adapter.executable).Run(); err != nil {
-		return nil, fmt.Errorf("remote preflight failed: install `agentclip` and `%s` on %s, or retry with --skip-agent: %w", adapter.executable, profile.Destination, err)
-	}
-	if err := configureRemoteAdapter(profile, adapter); err != nil {
-		return nil, err
-	}
-	return []agentAdapter{adapter}, nil
-}
-
-func configureAllRemoteAgents(profile companion.Profile) ([]agentAdapter, error) {
-	output, err := remote.SupportedAgentsForProfile(profile).Output()
-	if err != nil {
-		return nil, fmt.Errorf("remote preflight failed: install `agentclip` on %s, or retry with --skip-agent: %w", profile.Destination, err)
-	}
-	var configured []agentAdapter
-	for _, agentID := range strings.Fields(string(output)) {
-		adapter, err := resolveAgentAdapter(agentID)
-		if err != nil {
-			return nil, fmt.Errorf("read supported harnesses on %s: %w", profile.Destination, err)
-		}
-		if err := configureRemoteAdapter(profile, adapter); err != nil {
-			return nil, err
-		}
-		configured = append(configured, adapter)
-	}
-	if len(configured) == 0 {
-		return nil, fmt.Errorf("no supported harness is installed on %s; supported harnesses: codex, claude, gemini, agy, opencode, pi", profile.Destination)
-	}
-	return configured, nil
-}
-
-func configureRemoteAdapter(profile companion.Profile, adapter agentAdapter) error {
-	name := "agentclip-" + profile.Name
-	// Re-pairing deliberately replaces only AgentClip's own named MCP entry.
-	_ = remote.LoginForProfile(profile, adapter.removeArguments(name)...).Run()
-	if err := remote.LoginForProfile(profile, adapter.addArguments(profile, name)...).Run(); err != nil {
-		return fmt.Errorf("configure %s MCP on %s: %w", adapter.displayName, profile.Destination, err)
-	}
-	return nil
-}
-
-func resolveAgentAdapter(agentID string) (agentAdapter, error) {
-	switch strings.ToLower(strings.TrimSpace(agentID)) {
-	case "codex":
-		return agentAdapter{
-			id: "codex", displayName: "Codex", executable: "codex",
-			removeArguments: func(name string) []string {
-				return []string{"codex", "mcp", "remove", name}
-			},
-			addArguments: func(profile companion.Profile, name string) []string {
-				return append(agentEnvironmentArguments([]string{"codex", "mcp", "add", name}, profile), "--", "agentclip", "mcp")
-			},
-		}, nil
-	case "claude", "claude-code":
-		return agentAdapter{
-			id: "claude", displayName: "Claude Code", executable: "claude",
-			removeArguments: func(name string) []string {
-				return []string{"claude", "mcp", "remove", "--scope", "user", name}
-			},
-			addArguments: func(profile companion.Profile, name string) []string {
-				arguments := []string{"claude", "mcp", "add", name, "--scope", "user"}
-				return append(agentEnvironmentArguments(arguments, profile), "--", "agentclip", "mcp")
-			},
-		}, nil
-	case "gemini", "gemini-cli":
-		return agentAdapter{
-			id: "gemini", displayName: "Gemini CLI", executable: "gemini",
-			removeArguments: func(name string) []string {
-				return []string{"gemini", "mcp", "remove", "--scope", "user", name}
-			},
-			addArguments: func(profile companion.Profile, name string) []string {
-				arguments := []string{"gemini", "mcp", "add", name, "agentclip", "mcp", "--scope", "user"}
-				return agentEnvironmentArguments(arguments, profile)
-			},
-		}, nil
-	case "agy", "antigravity", "antigravity-cli":
-		return agentAdapter{
-			id: "agy", displayName: "AGY / Antigravity CLI", executable: "agy",
-			removeArguments: func(name string) []string {
-				return []string{"agentclip", "harness", "remove", "agy", "--name", name}
-			},
-			addArguments: func(profile companion.Profile, name string) []string {
-				return harnessInstallArguments("agy", profile, name)
-			},
-		}, nil
-	case "opencode":
-		return agentAdapter{
-			id: "opencode", displayName: "OpenCode", executable: "opencode",
-			removeArguments: func(name string) []string {
-				return []string{"agentclip", "harness", "remove", "opencode", "--name", name}
-			},
-			addArguments: func(profile companion.Profile, name string) []string {
-				return harnessInstallArguments("opencode", profile, name)
-			},
-		}, nil
-	case "pi", "pi-coding-agent":
-		return agentAdapter{
-			id: "pi", displayName: "Pi Coding Agent", executable: "pi",
-			removeArguments: func(name string) []string {
-				return []string{"agentclip", "harness", "remove", "pi", "--name", name}
-			},
-			addArguments: func(profile companion.Profile, name string) []string {
-				return harnessInstallArguments("pi", profile, name)
-			},
-		}, nil
-	default:
-		return agentAdapter{}, fmt.Errorf("unsupported agent %q; supported agents: codex, claude, gemini, agy, opencode, pi", agentID)
-	}
-}
-
-func harnessInstallArguments(harness string, profile companion.Profile, name string) []string {
-	arguments := []string{"agentclip", "harness", "install", harness, "--name", name, "--port", strconv.Itoa(profile.RemotePort), "--token", profile.Token}
-	if profile.HasUploadToken() {
-		arguments = append(arguments, "--upload-token", profile.UploadToken)
-	}
-	return arguments
-}
-
-func agentEnvironmentArguments(arguments []string, profile companion.Profile) []string {
-	arguments = append(arguments,
-		"--env", fmt.Sprintf("AGENTCLIP_BRIDGE_PORT=%d", profile.RemotePort),
-		"--env", "AGENTCLIP_SESSION_TOKEN="+profile.Token,
-	)
-	if profile.HasUploadToken() {
-		arguments = append(arguments, "--env", "AGENTCLIP_UPLOAD_TOKEN="+profile.UploadToken)
-	}
-	return arguments
-}
-
-func displayAgents(adapters []agentAdapter) string {
-	names := make([]string, len(adapters))
-	for index, adapter := range adapters {
-		names[index] = adapter.displayName
-	}
-	return strings.Join(names, ", ")
 }
 
 func runCompanion(arguments []string) error {
