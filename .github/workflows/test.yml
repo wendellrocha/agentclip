@@ -56,6 +56,47 @@ jobs:
           path: coverage.out
           retention-days: 14
 
+  native-clipboard:
+    name: Native clipboard (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    # macOS and Windows runners may not expose a usable clipboard session, so
+    # they report without blocking until they have proven stable.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, experimental: false }
+          - { os: macos-latest, experimental: true }
+          - { os: windows-latest, experimental: true }
+    env:
+      AGENTCLIP_NATIVE_CLIPBOARD_TEST: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install X server and xclip
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xclip
+
+      # A virtual X server stands in for a desktop session on Linux.
+      - name: Test against the real clipboard (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a go test -count=1 -v -run '^TestNative' ./internal/clipboard
+
+      - name: Test against the real clipboard
+        if: runner.os != 'Linux'
+        shell: bash
+        run: go test -count=1 -v -run '^TestNative' ./internal/clipboard
+
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
