@@ -121,8 +121,16 @@ type Session struct {
 	Persistent           bool
 }
 
+// Logger receives security-relevant events. Implementations must record
+// metadata only: never tokens, clipboard content or destination paths.
+type Logger interface {
+	Info(message string, args ...any)
+	Error(message string, args ...any)
+}
+
 type Bridge struct {
 	mu       sync.Mutex
+	logger   Logger
 	snapshot *Snapshot
 	items    map[string]*armedItem
 	sessions map[string]*Session
@@ -392,11 +400,11 @@ func (b *Bridge) authenticate(r *http.Request) (*Session, string) {
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return nil, "UNAUTHORIZED"
 	}
+	hash := sha256.Sum256([]byte(parts[1]))
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pruneSessionsLocked(b.now())
 	for _, session := range b.sessions {
-		hash := sha256.Sum256([]byte(parts[1]))
 		if subtle.ConstantTimeCompare(hash[:], session.TokenHash[:]) == 1 {
 			if session.Revoked || (!session.Persistent && b.now().After(session.ExpiresAt)) {
 				return nil, "INVALID_SESSION"
@@ -644,7 +652,28 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
+// SetLogger enables event logging; a nil logger disables it.
+func (b *Bridge) SetLogger(logger Logger) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.logger = logger
+}
+
+// logEvent must not be called with b.mu held; use logLocked when it is.
+func (b *Bridge) logEvent(message string, args ...any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.logLocked(message, args...)
+}
+
+func (b *Bridge) logLocked(message string, args ...any) {
+	if b.logger != nil {
+		b.logger.Info(message, args...)
+	}
+}
+
 func (b *Bridge) err(w http.ResponseWriter, status int, code, msg string) {
+	b.logEvent("request rejected: status=%d code=%s", status, code)
 	b.jsonStatus(w, status, ErrorResponse{Code: code, Message: msg})
 }
 

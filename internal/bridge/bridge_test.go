@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
@@ -346,5 +347,90 @@ func TestOpenInboundTextFileAllowsCSVAndRejectsBinary(t *testing.T) {
 	defer binaryFile.Close()
 	if data, err := io.ReadAll(binaryFile); err != nil || !bytes.Equal(data, binary) || openedBinary.Name != "report.png" {
 		t.Fatalf("opened binary = %q %#v %v", data, openedBinary, err)
+	}
+}
+
+func TestInboundOffersAreCappedPerProfile(t *testing.T) {
+	b := New(time.Minute)
+	if err := b.RegisterPersistentSessionWithUpload("companion:dev", "read-token", "upload-token"); err != nil {
+		t.Fatal(err)
+	}
+	checksum := strings.Repeat("a", 64)
+	for i := 0; i < MaxOpenInboundOffers; i++ {
+		if _, err := b.CreateInboundOffer("companion:dev", "report.csv", 1, checksum); err != nil {
+			t.Fatalf("offer %d: %v", i, err)
+		}
+	}
+	if _, err := b.CreateInboundOffer("companion:dev", "report.csv", 1, checksum); err == nil {
+		t.Fatal("offer beyond the cap must be rejected")
+	}
+}
+
+func TestSettledInboundOffersArePruned(t *testing.T) {
+	b := New(time.Minute)
+	if err := b.RegisterPersistentSessionWithUpload("companion:dev", "read-token", "upload-token"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	b.now = func() time.Time { return now }
+	checksum := strings.Repeat("a", 64)
+	rejected, err := b.CreateInboundOffer("companion:dev", "a.csv", 1, checksum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.RejectInboundOffer(rejected.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.CreateInboundOffer("companion:dev", "b.csv", 1, checksum); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(InboundOfferTTL + InboundRetention)
+	b.InboundLocalStatus()
+	if len(b.inbound) != 0 {
+		t.Fatalf("settled offers leaked: %d", len(b.inbound))
+	}
+}
+
+type recordingLogger struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *recordingLogger) Info(message string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, fmt.Sprintf(message, args...))
+}
+
+func (l *recordingLogger) Error(message string, args ...any) { l.Info(message, args...) }
+
+func TestSecurityEventsAreLoggedWithoutSecrets(t *testing.T) {
+	b := New(time.Minute)
+	logger := &recordingLogger{}
+	b.SetLogger(logger)
+	if err := b.RegisterPersistentSessionWithUpload("companion:dev", "read-token", "upload-token"); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	request.Header.Set("Authorization", "Bearer wrong-secret")
+	response := httptest.NewRecorder()
+	b.Handler().ServeHTTP(response, request)
+	offer, err := b.CreateInboundOffer("companion:dev", "report.csv", 3, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.RejectInboundOffer(offer.ID); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(logger.events, "\n")
+	for _, want := range []string{"request rejected: status=401 code=UNAUTHORIZED", "inbound offer created: id=" + offer.ID, "inbound offer rejected: id=" + offer.ID} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing event %q in:\n%s", want, joined)
+		}
+	}
+	for _, secret := range []string{"wrong-secret", "read-token", "upload-token", "report.csv"} {
+		if strings.Contains(joined, secret) {
+			t.Errorf("log leaked %q", secret)
+		}
 	}
 }
