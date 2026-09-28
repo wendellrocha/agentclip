@@ -36,16 +36,16 @@ import (
 	"github.com/wendellrocha/agentclip/internal/harness"
 	"github.com/wendellrocha/agentclip/internal/mcpserver"
 	"github.com/wendellrocha/agentclip/internal/release"
+	"github.com/wendellrocha/agentclip/internal/remote"
 	"github.com/wendellrocha/agentclip/internal/sshsession"
 	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
 
 const (
-	clipboardTimeout  = 5 * time.Second
-	startupTimeout    = 3 * time.Second
-	remotePortMin     = 32000
-	remotePortMax     = 44999
-	releaseRepository = "wendellrocha/agentclip"
+	clipboardTimeout = 5 * time.Second
+	startupTimeout   = 3 * time.Second
+	remotePortMin    = 32000
+	remotePortMax    = 44999
 )
 
 var releaseTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$`)
@@ -298,7 +298,7 @@ func runSetup(arguments []string) error {
 	if existing, err := companion.LoadProfile(name); err == nil {
 		existingIdentityFile = existing.SSHIdentityFile
 	}
-	identityFile, err := ensureSetupSSHIdentity(arguments[0], name, existingIdentityFile)
+	identityFile, err := remote.EnsureSetupSSHIdentity(arguments[0], name, existingIdentityFile)
 	if err != nil {
 		return err
 	}
@@ -308,7 +308,7 @@ func runSetup(arguments []string) error {
 			return err
 		}
 		fmt.Printf("Installing AgentClip %s on %s...\n", tag, arguments[0])
-		if err := remoteInstallCommandWithIdentity(arguments[0], identityFile, tag).Run(); err != nil {
+		if err := remote.InstallCommandWithIdentity(arguments[0], identityFile, tag).Run(); err != nil {
 			return fmt.Errorf("install AgentClip on %s: %w", arguments[0], err)
 		}
 	}
@@ -380,7 +380,7 @@ func runUninstall(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	if err := remoteLoginForProfile(profile, adapter.removeArguments("agentclip-"+profile.Name)...).Run(); err != nil {
+	if err := remote.LoginForProfile(profile, adapter.removeArguments("agentclip-"+profile.Name)...).Run(); err != nil {
 		return fmt.Errorf("remove AgentClip MCP from %s on %s: %w", adapter.displayName, profile.Destination, err)
 	}
 	fmt.Printf("Removed the AgentClip MCP entry from %s for profile %q. The harness remains installed.\n", adapter.displayName, profile.Name)
@@ -481,7 +481,7 @@ func configureRemoteAgents(profile companion.Profile, selection string) ([]agent
 	if err != nil {
 		return nil, err
 	}
-	if err := remotePreflightForProfile(profile, adapter.executable).Run(); err != nil {
+	if err := remote.PreflightForProfile(profile, adapter.executable).Run(); err != nil {
 		return nil, fmt.Errorf("remote preflight failed: install `agentclip` and `%s` on %s, or retry with --skip-agent: %w", adapter.executable, profile.Destination, err)
 	}
 	if err := configureRemoteAdapter(profile, adapter); err != nil {
@@ -491,7 +491,7 @@ func configureRemoteAgents(profile companion.Profile, selection string) ([]agent
 }
 
 func configureAllRemoteAgents(profile companion.Profile) ([]agentAdapter, error) {
-	output, err := remoteSupportedAgentsForProfile(profile).Output()
+	output, err := remote.SupportedAgentsForProfile(profile).Output()
 	if err != nil {
 		return nil, fmt.Errorf("remote preflight failed: install `agentclip` on %s, or retry with --skip-agent: %w", profile.Destination, err)
 	}
@@ -515,8 +515,8 @@ func configureAllRemoteAgents(profile companion.Profile) ([]agentAdapter, error)
 func configureRemoteAdapter(profile companion.Profile, adapter agentAdapter) error {
 	name := "agentclip-" + profile.Name
 	// Re-pairing deliberately replaces only AgentClip's own named MCP entry.
-	_ = remoteLoginForProfile(profile, adapter.removeArguments(name)...).Run()
-	if err := remoteLoginForProfile(profile, adapter.addArguments(profile, name)...).Run(); err != nil {
+	_ = remote.LoginForProfile(profile, adapter.removeArguments(name)...).Run()
+	if err := remote.LoginForProfile(profile, adapter.addArguments(profile, name)...).Run(); err != nil {
 		return fmt.Errorf("configure %s MCP on %s: %w", adapter.displayName, profile.Destination, err)
 	}
 	return nil
@@ -616,225 +616,6 @@ func displayAgents(adapters []agentAdapter) string {
 		names[index] = adapter.displayName
 	}
 	return strings.Join(names, ", ")
-}
-
-func remotePreflightCommand(destination, agentExecutable string) *exec.Cmd {
-	return remotePreflightCommandWithIdentity(destination, "", agentExecutable)
-}
-
-func remotePreflightForProfile(profile companion.Profile, agentExecutable string) *exec.Cmd {
-	return remotePreflightCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, agentExecutable)
-}
-
-func remotePreflightCommandWithIdentity(destination, identityFile, agentExecutable string) *exec.Cmd {
-	// ssh combines all arguments after the destination into a remote shell
-	// command. Use a login shell as well: remote AgentClip and Codex are often
-	// installed through ~/.profile or Volta, neither of which a plain SSH
-	// command is required to load.
-	check := "export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null && command -v " + shellQuote(agentExecutable) + " >/dev/null"
-	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(check))
-}
-
-func remoteSupportedAgentsCommand(destination string) *exec.Cmd {
-	return remoteSupportedAgentsCommandWithIdentity(destination, "")
-}
-
-func remoteSupportedAgentsForProfile(profile companion.Profile) *exec.Cmd {
-	return remoteSupportedAgentsCommandWithIdentity(profile.Destination, profile.SSHIdentityFile)
-}
-
-func remoteSupportedAgentsCommandWithIdentity(destination, identityFile string) *exec.Cmd {
-	// This deliberately detects only built-in adapters. It neither installs
-	// harnesses nor scans project-level configuration files.
-	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(remoteSupportedAgentsScript()))
-}
-
-func remoteSupportedAgentsScript() string {
-	return "export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null || exit 10; for agentclip_harness in codex claude gemini agy opencode pi; do command -v \"$agentclip_harness\" >/dev/null && printf '%s\\n' \"$agentclip_harness\"; done; true"
-}
-
-func remoteLoginCommand(destination string, arguments ...string) *exec.Cmd {
-	return remoteLoginCommandWithIdentity(destination, "", arguments...)
-}
-
-func remoteLoginForProfile(profile companion.Profile, arguments ...string) *exec.Cmd {
-	return remoteLoginCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, arguments...)
-}
-
-func remoteLoginCommandWithIdentity(destination, identityFile string, arguments ...string) *exec.Cmd {
-	quoted := make([]string, len(arguments))
-	for index, argument := range arguments {
-		quoted[index] = shellQuote(argument)
-	}
-	script := "export PATH=\"$HOME/.local/bin:$PATH\"; " + strings.Join(quoted, " ")
-	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(script))
-}
-
-func remoteInstallCommand(destination, tag string) *exec.Cmd {
-	return remoteInstallCommandWithIdentity(destination, "", tag)
-}
-
-func remoteInstallCommandWithIdentity(destination, identityFile, tag string) *exec.Cmd {
-	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(remoteInstallScript(tag)))
-}
-
-func remoteSSHCommand(destination, identityFile, remoteCommand string) *exec.Cmd {
-	arguments := []string{}
-	if identityFile != "" {
-		arguments = append(arguments, "-i", identityFile, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes")
-	}
-	arguments = append(arguments, destination, remoteCommand)
-	return exec.Command("ssh", arguments...)
-}
-
-// ensureSetupSSHIdentity preserves an already-working SSH key setup. When the
-// destination rejects non-interactive key authentication, it creates a
-// dedicated AgentClip key and installs its public half through one interactive
-// password login before the rest of setup runs.
-func ensureSetupSSHIdentity(destination, profileName, existingIdentityFile string) (string, error) {
-	output, err := sshKeyCheckCommand(destination, existingIdentityFile).CombinedOutput()
-	if err == nil {
-		return existingIdentityFile, nil
-	}
-	if !sshAuthenticationFailure(output) {
-		return "", fmt.Errorf("check SSH key authentication for %s: %s", destination, sshErrorSummary(output, err))
-	}
-	identityFile, publicKey, err := ensureAgentClipSSHKey(profileName)
-	if err != nil {
-		return "", err
-	}
-	fmt.Printf("Configuring a dedicated AgentClip SSH key for %s (your password may be requested once)...\n", destination)
-	bootstrap := bootstrapSSHKeyCommand(destination, publicKey)
-	bootstrap.Stdin, bootstrap.Stdout, bootstrap.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := bootstrap.Run(); err != nil {
-		return "", fmt.Errorf("install AgentClip SSH key on %s: %w", destination, err)
-	}
-	output, err = sshKeyCheckCommand(destination, identityFile).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("verify AgentClip SSH key on %s: %s", destination, sshErrorSummary(output, err))
-	}
-	return identityFile, nil
-}
-
-func sshKeyCheckCommand(destination, identityFile string) *exec.Cmd {
-	arguments := []string{"-o", "BatchMode=yes"}
-	if identityFile != "" {
-		arguments = append(arguments, "-i", identityFile, "-o", "IdentitiesOnly=yes")
-	}
-	arguments = append(arguments, destination, "true")
-	return exec.Command("ssh", arguments...)
-}
-
-func sshAuthenticationFailure(output []byte) bool {
-	message := strings.ToLower(string(output))
-	return strings.Contains(message, "permission denied") ||
-		strings.Contains(message, "authentication failed") ||
-		strings.Contains(message, "too many authentication failures") ||
-		strings.Contains(message, "no supported authentication methods")
-}
-
-func sshErrorSummary(output []byte, err error) string {
-	message := strings.TrimSpace(string(output))
-	if message == "" {
-		message = err.Error()
-	}
-	if len(message) > 512 {
-		message = message[:512] + "…"
-	}
-	return message
-}
-
-func ensureAgentClipSSHKey(profileName string) (string, string, error) {
-	identityFile, err := companion.SSHIdentityPath(profileName)
-	if err != nil {
-		return "", "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(identityFile), 0700); err != nil {
-		return "", "", fmt.Errorf("create AgentClip SSH key directory: %w", err)
-	}
-	if err := os.Chmod(filepath.Dir(identityFile), 0700); err != nil {
-		return "", "", fmt.Errorf("secure AgentClip SSH key directory: %w", err)
-	}
-	publicFile := identityFile + ".pub"
-	privateInfo, privateErr := os.Lstat(identityFile)
-	publicInfo, publicErr := os.Lstat(publicFile)
-	if privateErr == nil && (!privateInfo.Mode().IsRegular() || privateInfo.Mode()&os.ModeSymlink != 0) {
-		return "", "", errors.New("AgentClip SSH private key is not a regular file")
-	}
-	if publicErr == nil && (!publicInfo.Mode().IsRegular() || publicInfo.Mode()&os.ModeSymlink != 0) {
-		return "", "", errors.New("AgentClip SSH public key is not a regular file")
-	}
-	if privateErr != nil && !os.IsNotExist(privateErr) {
-		return "", "", fmt.Errorf("inspect AgentClip SSH private key: %w", privateErr)
-	}
-	if publicErr != nil && !os.IsNotExist(publicErr) {
-		return "", "", fmt.Errorf("inspect AgentClip SSH public key: %w", publicErr)
-	}
-	if os.IsNotExist(privateErr) && !os.IsNotExist(publicErr) {
-		return "", "", errors.New("AgentClip SSH public key exists without its private key")
-	}
-	if os.IsNotExist(privateErr) {
-		command := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "agentclip:"+profileName, "-f", identityFile)
-		if output, err := command.CombinedOutput(); err != nil {
-			return "", "", fmt.Errorf("generate AgentClip SSH key (requires ssh-keygen): %s", sshErrorSummary(output, err))
-		}
-	} else if os.IsNotExist(publicErr) {
-		output, err := exec.Command("ssh-keygen", "-y", "-f", identityFile).Output()
-		if err != nil {
-			return "", "", fmt.Errorf("derive AgentClip SSH public key: %w", err)
-		}
-		if err := os.WriteFile(publicFile, output, 0600); err != nil {
-			return "", "", fmt.Errorf("write AgentClip SSH public key: %w", err)
-		}
-	}
-	if err := os.Chmod(identityFile, 0600); err != nil {
-		return "", "", fmt.Errorf("secure AgentClip SSH private key: %w", err)
-	}
-	if err := os.Chmod(publicFile, 0600); err != nil {
-		return "", "", fmt.Errorf("secure AgentClip SSH public key: %w", err)
-	}
-	publicKey, err := readAgentClipSSHPublicKey(publicFile)
-	if err != nil {
-		return "", "", err
-	}
-	return identityFile, publicKey, nil
-}
-
-func readAgentClipSSHPublicKey(path string) (string, error) {
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read AgentClip SSH public key: %w", err)
-	}
-	key := strings.TrimSpace(string(payload))
-	if strings.ContainsAny(key, "\r\n") || !strings.HasPrefix(key, "ssh-ed25519 ") || len(strings.Fields(key)) < 2 {
-		return "", errors.New("invalid AgentClip SSH public key")
-	}
-	return key, nil
-}
-
-func bootstrapSSHKeyCommand(destination, publicKey string) *exec.Cmd {
-	script := strings.Join([]string{
-		"set -eu",
-		"umask 077",
-		"mkdir -p \"$HOME/.ssh\"",
-		"touch \"$HOME/.ssh/authorized_keys\"",
-		"grep -qxF " + shellQuote(publicKey) + " \"$HOME/.ssh/authorized_keys\" || printf '%s\\n' " + shellQuote(publicKey) + " >> \"$HOME/.ssh/authorized_keys\"",
-	}, "; ")
-	return exec.Command("ssh", "-o", "NumberOfPasswordPrompts=1", destination, "sh -lc "+shellQuote(script))
-}
-
-func remoteInstallScript(tag string) string {
-	// The installer detects the remote OS and architecture, verifies the release
-	// checksum, and installs only into the remote user's home directory.
-	installerURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/scripts/install.sh", releaseRepository, tag)
-	return strings.Join([]string{
-		"set -eu",
-		"curl -fsSL --retry 3 " + shellQuote(installerURL) + " | sh -s -- --version " + shellQuote(tag),
-	}, "; ")
-}
-
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func runCompanion(arguments []string) error {
@@ -989,7 +770,7 @@ func runUpgrade(arguments []string) error {
 	results := make([]remoteUpgradeResult, 0, len(profiles))
 	for _, profile := range profiles {
 		fmt.Printf("Updating %q on %s...\n", profile.Name, profile.Destination)
-		err := remoteInstallCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, tag).Run()
+		err := remote.InstallCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, tag).Run()
 		results = append(results, remoteUpgradeResult{Profile: profile.Name, Err: err})
 	}
 	if err := stopCompanions(active); err != nil {
