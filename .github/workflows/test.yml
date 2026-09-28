@@ -129,17 +129,23 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
+          - macos-latest
           - windows-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
+      # macOS ships BSD awk and only shasum, so the installer must run there too.
       - name: Validate POSIX installer
         if: runner.os != 'Windows'
         run: |
           sh -n scripts/install.sh
-          shellcheck -S warning scripts/install.sh
+          sh scripts/install.sh --help
+
+      - name: Shellcheck installer
+        if: runner.os == 'Linux'
+        run: shellcheck -S warning scripts/install.sh
 
       - name: Validate PowerShell installer
         if: runner.os == 'Windows'
