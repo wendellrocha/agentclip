@@ -673,20 +673,14 @@ func (b *Bridge) logLocked(message string, args ...any) {
 	if b.logger == nil {
 		return
 	}
-	for i, arg := range args {
-		if text, ok := arg.(string); ok {
-			args[i] = sanitizeLogValue(text)
-		}
-	}
-	b.logger.Info(message, args...)
+	b.logger.Info("%s", sanitizeLogLine(fmt.Sprintf(message, args...)))
 }
 
-// sanitizeLogValue keeps request-derived text from forging extra log lines.
-func sanitizeLogValue(value string) string {
-	return logValueEscaper.Replace(value)
+// sanitizeLogLine keeps request-derived text from forging extra log lines.
+func sanitizeLogLine(line string) string {
+	line = strings.ReplaceAll(line, "\n", `\n`)
+	return strings.ReplaceAll(line, "\r", `\r`)
 }
-
-var logValueEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`)
 
 const (
 	rejectionLogWindow = time.Minute
