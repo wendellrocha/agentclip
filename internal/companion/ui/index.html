@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101214">
+  <title>AgentClip Companion</title>
+  <link rel="icon" type="image/svg+xml" href="{{BASE}}/assets/favicon.svg">
+  <link rel="stylesheet" href="{{BASE}}/assets/styles.css">
+  <style>.file-path{overflow-wrap:anywhere}</style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="nav">
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true"><img src="{{BASE}}/assets/agentclip-mark.svg" alt=""></span>
+        <div class="brand-copy"><h1 class="h1">AgentClip Companion</h1><p class="t2">Controle sua conexão e os arquivos compartilhados</p></div>
+      </div>
+      <div class="header-meta"><span class="connection-pill" id="connection">Conectando…</span><span class="updated" id="updated">Carregando…</span></div>
+    </header>
+    <div class="dashboard-grid">
+      <aside class="sidebar" aria-label="Status do companion">
+        <section class="section-card status-section">
+          <div class="section-heading"><div><p class="eyebrow">VISÃO GERAL</p><h2 class="h2">Status do companion</h2></div><span class="live-indicator" id="live-indicator" aria-label="Conectando"></span></div>
+          <dl class="status-list" id="status"></dl>
+        </section>
+        <section class="section-card approval-card">
+          <div class="section-heading"><div><p class="eyebrow">AÇÕES</p><h2 class="h2">Aprovação pendente</h2></div><span class="count-badge" id="offer-count">0</span></div>
+          <div id="offers"></div>
+        </section>
+        <section class="section-card stop-card"><div><h2 class="stop-title">Encerrar sessão</h2><p class="muted">Desconecta este companion do servidor.</p></div><button class="btn btn-danger" type="button" id="stop">Parar Companion</button></section>
+      </aside>
+      <section class="files-section" aria-labelledby="files-title">
+        <div class="files-heading"><div><p class="eyebrow">BIBLIOTECA</p><h2 class="h2" id="files-title">Arquivos recebidos</h2><p class="muted">Conteúdos disponíveis neste dispositivo.</p><span class="sr-only">Recebidos recentemente</span></div><span class="files-count"><span class="count-number" id="file-count">0</span> arquivos</span></div>
+        <div class="file-list" id="received"></div>
+      </section>
+    </div>
+    <footer class="footer"><span>AgentClip Companion</span><span>Conexão protegida <span class="footer-dot"></span></span></footer>
+  </main>
+<script>
+const base = "{{BASE}}";
+const esc = v => String(v ?? "—").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const escAttr = v => esc(v).replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+const feedbackById = new Map();
+const contentPrefetch = new Map();
+let prefetchedBytes = 0;
+const dateTime = new Intl.DateTimeFormat('pt-BR',{dateStyle:'medium',timeStyle:'short'});
+function formatDateTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'—':dateTime.format(date)}
+function formatBytes(bytes){if(!Number.isFinite(bytes)||bytes<0)return '—';const units=['B','KB','MB','GB'];let value=bytes,unit=0;while(value>=1024&&unit<units.length-1){value/=1024;unit++}return new Intl.NumberFormat('pt-BR',{maximumFractionDigits:value>=10?0:1}).format(value)+' '+units[unit]}
+function statusRow(k,v){return '<div class="status-row"><dt>'+k+'</dt><dd>'+v+'</dd></div>'}
+async function copyText(text){if(navigator.clipboard?.writeText){try{await navigator.clipboard.writeText(text);return}catch(_){/* Try the legacy clipboard path below. */}}const area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.append(area);area.select();let ok=false;try{ok=document.execCommand('copy')}finally{area.remove()}if(!ok)throw new Error('clipboard unavailable')}
+function fetchContent(id,signal){return fetch(base+'/api/inbound/'+encodeURIComponent(id)+'/content',{cache:'no-store',signal}).then(response=>{if(!response.ok)throw new Error('content unavailable');return response.text()})}
+function removePrefetch(id,entry,abort){if(contentPrefetch.get(id)!==entry)return;contentPrefetch.delete(id);prefetchedBytes=Math.max(0,prefetchedBytes-entry.size);if(abort&&!entry.inUse)entry.controller.abort()}
+function prefetchContent(id,size){if(!Number.isFinite(size)||size<0||size>1048576||contentPrefetch.has(id))return null;while(contentPrefetch.size>=8||prefetchedBytes+size>1048576){const oldest=contentPrefetch.entries().next();if(oldest.done)return null;removePrefetch(oldest.value[0],oldest.value[1],true)}const entry={createdAt:Date.now(),size,inUse:false,controller:new AbortController()};entry.promise=fetchContent(id,entry.controller.signal);contentPrefetch.set(id,entry);prefetchedBytes+=size;entry.promise.catch(()=>removePrefetch(id,entry,false));setTimeout(()=>removePrefetch(id,entry,true),15000);return entry.promise}
+function setFeedback(id,kind,message,style){const entry=feedbackById.get(id)||{};entry[kind]={message,style};feedbackById.set(id,entry);const target=[...document.querySelectorAll('.copy-feedback')].find(node=>node.dataset.feedbackId===id);if(target){target.textContent=Object.values(entry).map(item=>item.message).filter(Boolean).join(' ');target.className='copy-feedback '+(style||'')}}
+async function copyPath(button){const id=button.dataset.id;try{await copyText(button.dataset.path);setFeedback(id,'path','Caminho copiado.','positive')}catch(_){setFeedback(id,'path','Não foi possível copiar o caminho.','bad')}}
+async function copyContent(button){const id=button.dataset.id;button.disabled=true;setFeedback(id,'content','Copiando conteúdo…','');try{const cached=contentPrefetch.get(id);let content;if(cached&&Date.now()-cached.createdAt<15000){cached.inUse=true;try{content=await cached.promise}finally{cached.inUse=false;removePrefetch(id,cached,false)}}else content=await fetchContent(id);await copyText(content);setFeedback(id,'content','Conteúdo copiado.','positive')}catch(_){setFeedback(id,'content','Não foi possível copiar o conteúdo.','bad')}finally{button.disabled=false}}
+async function inbound(id,action){const r=await fetch(base+'/api/inbound/'+encodeURIComponent(id)+'/'+action,{method:'POST'});if(!r.ok){alert(await r.text());return}await refresh()}
+function fileCard(o){const id=encodeURIComponent(o.id);const ext=(o.name||'').split('.').pop().toUpperCase().slice(0,3)||'FILE';return '<article class="file-card"><div class="file-icon" aria-hidden="true"><span>'+esc(ext)+'</span></div><div class="file-info"><h3 class="h3">'+esc(o.name)+'</h3><p class="file-meta">Recebido em '+esc(formatDateTime(o.delivered_at))+' <span>·</span> '+esc(formatBytes(o.size))+'</p><p class="file-path">'+esc(o.path)+'</p></div><div class="file-actions"><div class="primary-actions">'+(o.previewable?'<a class="btn btn-primary" target="_blank" rel="noopener" href="'+base+'/api/inbound/'+id+'/content">Abrir conteúdo</a><button class="btn btn-secondary copy-content" type="button" data-id="'+escAttr(o.id)+'" data-size="'+escAttr(o.size)+'">Copiar conteúdo</button>':'')+'</div><div class="secondary-actions"><a class="btn btn-quiet" href="'+base+'/api/inbound/'+id+'/download">Baixar</a><button class="btn btn-quiet copy-path" type="button" data-path="'+escAttr(o.path)+'" data-id="'+escAttr(o.id)+'">Copiar caminho</button></div><span class="copy-feedback" data-feedback-id="'+escAttr(o.id)+'" aria-live="polite">'+esc(Object.values(feedbackById.get(o.id)||{}).map(item=>item.message).filter(Boolean).join(' '))+'</span></div></article>'}
+async function refresh(){try{const r=await fetch(base+'/api/status',{cache:'no-store'});if(!r.ok)throw new Error('status unavailable');const s=await r.json();const connected=!!s.tunnel?.connected;const connection=document.querySelector('#connection');connection.classList.toggle('offline',!connected);connection.innerHTML='<span class="status-dot '+(connected?'':'offline')+'"></span> Túnel '+(connected?'conectado':'desconectado');const live=document.querySelector('#live-indicator');live.classList.toggle('offline',!connected);live.setAttribute('aria-label',connected?'Túnel conectado':'Túnel desconectado');const items=s.clipboard?.items||[];const clip=s.clipboard?.armed?(items.length?'<span class="positive">'+items.length+' item(ns)</span><span class="clipboard-name">'+esc(items.map(i=>i.name||i.kind).join(', '))+'</span>':'<span class="muted">Sem itens</span>'):'<span class="muted">Sem clipboard armado</span>';const expiry=s.clipboard?.armed&&s.clipboard?.expires_at?esc(formatDateTime(s.clipboard.expires_at)):'—';let rows=statusRow('Perfil',esc(s.profile))+statusRow('Servidor','<code>'+esc(s.destination)+'</code>')+statusRow('Túnel',connected?'<span class="positive">Conectado</span>':'<span class="bad">Desconectado</span>')+statusRow('Clipboard',clip)+statusRow('Expira',expiry);if(s.tunnel?.last_error)rows+=statusRow('Último erro','<span class="bad">'+esc(s.tunnel.last_error)+'</span>');if(s.release?.update_available)rows+=statusRow('Atualização disponível','<span class="bad"><code>'+esc(s.release.latest_version)+'</code> · execute <code>agentclip upgrade</code></span>');else if(s.release?.error)rows+=statusRow('Atualização','<span class="muted">'+esc(s.release.error)+'</span>');document.querySelector('#status').innerHTML=rows;const offers=s.inbound?.offers||[];document.querySelector('#offer-count').textContent=offers.length;document.querySelector('#offers').innerHTML=offers.length?'<p class="approval-status">Aguardando sua aprovação <strong>('+offers.length+')</strong></p>'+offers.map(o=>'<div class="offer-row"><span><span class="file-name">'+esc(o.name)+'</span><span class="muted metadata">Oferta recebida em '+esc(formatDateTime(o.created_at))+' · '+esc(formatBytes(o.size))+'<br>Expira em '+esc(formatDateTime(o.expires_at))+'</span></span><span class="actions"><button class="btn btn-accept" data-id="'+escAttr(o.id)+'">Aceitar</button><button class="btn btn-reject" data-id="'+escAttr(o.id)+'">Recusar</button></span></div>').join(''):'<p class="muted empty-copy">Nenhum arquivo aguardando aprovação.</p><div class="empty-state-icon" aria-hidden="true"><span>✓</span></div>';const received=s.inbound?.received||[];document.querySelector('#file-count').textContent=received.length;document.querySelector('#received').innerHTML=received.length?received.map(fileCard).join(''):'<p class="muted empty-copy">Nenhum arquivo recebido nesta sessão.</p>';document.querySelector('#updated').textContent='Atualizado às '+formatDateTime(new Date())}catch(_){document.querySelector('#connection').classList.add('offline');document.querySelector('#connection').innerHTML='<span class="status-dot offline"></span> Estado indisponível';const live=document.querySelector('#live-indicator');live.classList.add('offline');live.setAttribute('aria-label','Estado indisponível');document.querySelector('#updated').textContent='Falha ao atualizar · dados indisponíveis';document.querySelector('#status').innerHTML=statusRow('Status','<span class="bad">Não foi possível consultar o Companion.</span>');document.querySelector('#offer-count').textContent='—';document.querySelector('#offers').innerHTML='<p class="muted empty-copy">Estado das aprovações indisponível.</p>';document.querySelector('#file-count').textContent='—';document.querySelector('#received').innerHTML='<p class="muted empty-copy">Lista de arquivos indisponível.</p>'}}
+document.addEventListener('pointerover',e=>{const button=e.target.closest('.copy-content');if(button)(prefetchContent(button.dataset.id,Number(button.dataset.size))||Promise.resolve()).catch(()=>{})});document.addEventListener('focusin',e=>{const button=e.target.closest('.copy-content');if(button)(prefetchContent(button.dataset.id,Number(button.dataset.size))||Promise.resolve()).catch(()=>{})});document.addEventListener('click',e=>{const button=e.target.closest('button');if(!button)return;if(button.matches('.copy-content'))copyContent(button);else if(button.matches('.copy-path'))copyPath(button);else if(button.matches('.btn-accept'))inbound(button.dataset.id,'accept');else if(button.matches('.btn-reject'))inbound(button.dataset.id,'reject')});document.querySelector('#stop').onclick=async()=>{if(confirm('Parar o Companion?')){await fetch(base+'/api/stop',{method:'POST'});setTimeout(refresh,500)}};refresh();setInterval(refresh,2000);
+</script>
+</body>
+</html>

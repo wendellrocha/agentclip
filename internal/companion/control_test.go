@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+type trackedReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (r *trackedReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 func TestControlServerServesPrivateStatusViewAndStop(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	stopped := make(chan struct{}, 1)
@@ -52,10 +62,28 @@ func TestControlServerServesPrivateStatusViewAndStop(t *testing.T) {
 	if !strings.Contains(string(markup), "AgentClip Companion") {
 		t.Fatal("dashboard markup missing")
 	}
-	for _, expected := range []string{"btn-accept", "btn-reject", "Abrir conteúdo", "Baixar", "Copiar caminho", "overflow-wrap:anywhere", "Oferta recebida em", "Recebido em", "Recebidos recentemente", "formatDateTime", "formatBytes", "Atualização disponível", "agentclip upgrade"} {
+	for _, expected := range []string{"btn-accept", "btn-reject", "Abrir conteúdo", "Copiar conteúdo", "Baixar", "Copiar caminho", "overflow-wrap:anywhere", "Aguardando sua aprovação", "Recebido em", "Arquivos recebidos", "formatDateTime", "formatBytes", "Atualização", "agentclip upgrade"} {
 		if !strings.Contains(string(markup), expected) {
 			t.Fatalf("dashboard markup missing %q", expected)
 		}
+	}
+	fileCardStart := strings.Index(string(markup), "function fileCard(o){")
+	if fileCardStart < 0 {
+		t.Fatal("dashboard file card renderer missing")
+	}
+	fileCardEnd := strings.Index(string(markup)[fileCardStart:], "async function refresh()")
+	if fileCardEnd < 0 {
+		t.Fatal("dashboard file card renderer boundary missing")
+	}
+	fileCard := string(markup)[fileCardStart : fileCardStart+fileCardEnd]
+	previewBranch := strings.Index(fileCard, "o.previewable?")
+	copyButton := strings.Index(fileCard, ">Copiar conteúdo</button>")
+	if previewBranch < 0 || copyButton < 0 {
+		t.Fatal("previewable file copy action missing")
+	}
+	previewBranchEnd := strings.Index(fileCard[previewBranch:], "':'')")
+	if previewBranchEnd < 0 || copyButton < previewBranch || copyButton > previewBranch+previewBranchEnd {
+		t.Fatal("Copiar conteúdo must be rendered only inside the previewable file branch")
 	}
 	if err := StopRuntime(state); err != nil {
 		t.Fatal(err)
@@ -64,6 +92,37 @@ func TestControlServerServesPrivateStatusViewAndStop(t *testing.T) {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("stop callback was not called")
+	}
+}
+
+func TestControlServerServesDashboardBrandAssets(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	control, err := StartControl("dev", func() any { return map[string]any{} }, func() {}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+
+	for _, asset := range []struct {
+		path        string
+		contentType string
+	}{
+		{"assets/agentclip-mark.svg", "image/svg+xml"},
+		{"assets/favicon.svg", "image/svg+xml"},
+		{"assets/styles.css", "text/css; charset=utf-8"},
+	} {
+		response, err := http.Get(ViewURL(control.State) + asset.path)
+		if err != nil {
+			t.Fatalf("get %s: %v", asset.path, err)
+		}
+		data, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatalf("read %s: %v", asset.path, readErr)
+		}
+		if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != asset.contentType || len(data) == 0 {
+			t.Fatalf("asset %s response = %d %q (%d bytes)", asset.path, response.StatusCode, response.Header.Get("Content-Type"), len(data))
+		}
 	}
 }
 
@@ -134,5 +193,29 @@ func TestControlServerServesPrivateInboundTextContent(t *testing.T) {
 	}
 	if data, err := io.ReadAll(download.Body); err != nil || string(data) != "a,b\n1,2\n" {
 		t.Fatalf("download = %q, %v", data, err)
+	}
+}
+
+func TestControlServerDoesNotServeNonPreviewableInboundContent(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	reader := &trackedReadCloser{Reader: strings.NewReader("data")}
+	control, err := StartControl("dev", func() any { return map[string]any{} }, func() {}, nil, func(string) (InboundFileContent, error) {
+		return InboundFileContent{Name: "image.png", Size: 4, Previewable: false, Reader: reader}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+
+	response, err := http.Get(ViewURL(control.State) + "api/inbound/offer-1/content")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("non-previewable content status = %d, want %d", response.StatusCode, http.StatusNotFound)
+	}
+	if !reader.closed {
+		t.Fatal("rejected non-previewable content reader was not closed")
 	}
 }

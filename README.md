@@ -63,10 +63,11 @@ nunca escolhe nem recebe o caminho absoluto de destino no host.
 
 Na seção **Arquivos do servidor**, use **Abrir conteúdo** para revisar no
 navegador arquivos recebidos de texto, código ou dados tabulares, como `.csv`,
-`.tsv`, `.sql`, `.json`, `.yaml` e arquivos de código. A página é local e
+`.tsv`, `.sql`, `.json`, `.yaml` e arquivos de código. **Copiar conteúdo** copia
+o texto desses arquivos para a área de transferência. A página é local e
 privada; o conteúdo é servido como texto simples, sem executar HTML. Formatos
 binários, como `.xlsx` e imagens, exibem **Baixar** e **Copiar caminho**, mas
-não uma prévia de texto.
+não as ações de conteúdo de texto.
 
 Após atualizar para uma versão com esse recurso, refaça o pareamento do perfil
 para propagar a capability de upload aos harnesses remotos:

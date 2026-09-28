@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 	"strings"
 	"time"
 )
+
+//go:embed ui/index.html ui/assets/*
+var dashboardFiles embed.FS
 
 // ControlServer exposes a private loopback dashboard and lifecycle API for a
 // running Companion. The view URL contains an unguessable local capability.
@@ -85,8 +89,32 @@ func StartControl(profile string, snapshot func() any, stop func(), inboundActio
 		if r.URL.Path == prefix || r.URL.Path == prefix+"/" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'")
-			_, _ = w.Write([]byte(dashboardHTML))
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
+			page, err := dashboardFiles.ReadFile("ui/index.html")
+			if err != nil {
+				http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "{{BASE}}", prefix)))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, prefix+"/assets/") && r.Method == http.MethodGet {
+			name := strings.TrimPrefix(r.URL.Path, prefix+"/")
+			asset, err := dashboardFiles.ReadFile("ui/" + name)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			contentType := "application/octet-stream"
+			switch {
+			case strings.HasSuffix(name, ".css"):
+				contentType = "text/css; charset=utf-8"
+			case strings.HasSuffix(name, ".svg"):
+				contentType = "image/svg+xml"
+			}
+			w.Header().Set("Content-Type", contentType)
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			_, _ = w.Write(asset)
 			return
 		}
 		if r.URL.Path == prefix+"/api/status" && r.Method == http.MethodGet {
@@ -105,11 +133,13 @@ func StartControl(profile string, snapshot func() any, stop func(), inboundActio
 				return
 			}
 			content, err := inboundContent(parts[0])
+			if content.Reader != nil {
+				defer content.Reader.Close()
+			}
 			if err != nil || content.Reader == nil || content.Size < 0 || (parts[1] == "content" && !content.Previewable) {
 				http.Error(w, "received file is unavailable", http.StatusNotFound)
 				return
 			}
-			defer content.Reader.Close()
 			dispositionType, contentType := "attachment", "application/octet-stream"
 			if parts[1] == "content" {
 				dispositionType, contentType = "inline", "text/plain; charset=utf-8"
@@ -198,22 +228,3 @@ func noStore(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-const dashboardHTML = `<!doctype html>
-<html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AgentClip Companion</title><style>
-*{box-sizing:border-box}body{font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#101214;color:#f3f4f6;margin:0;padding:32px;max-width:760px;min-height:100vh}h1{margin:0 0 4px}h2{margin:0 0 4px}h3{font-size:14px;margin:24px 0 4px}.muted{color:#a8b0bb}.card{background:#1b1f24;border:1px solid #30363d;border-radius:12px;padding:20px;margin-top:20px;min-width:0}.row{display:flex;justify-content:space-between;align-items:center;gap:24px;padding:12px 0;border-bottom:1px solid #30363d}.row:last-child{border:0}.row>*,.file-path{min-width:0;overflow-wrap:anywhere;word-break:break-word}.row>strong{text-align:right}.file-name{font-weight:650}.metadata{font-size:14px;line-height:1.55;margin-top:3px}.section-note{font-size:14px;margin:0}.ok{color:#5eead4}.bad{color:#fca5a5}.actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}button,.btn-view{background:#475569;color:#fff;border:0;border-radius:8px;padding:10px 14px;font:inherit;cursor:pointer;text-decoration:none}.btn-accept{background:#059669}.btn-reject,.btn-stop{background:#dc2626}.btn-view{background:#2563eb}button:hover,.btn-view:hover{filter:brightness(1.08)}code{font-family:ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}@media(max-width:560px){body{padding:16px}.row{align-items:flex-start;flex-direction:column;gap:8px}.row>strong{text-align:left}.actions{justify-content:flex-start}}</style>
-<h1>AgentClip Companion</h1><p class="muted" id="updated">Carregando…</p><section class="card" id="status"></section><section class="card" id="inbound"></section><section class="card"><button id="stop">Parar Companion</button></section>
-<script>
-const base=location.pathname.replace(/\/$/,"");
-const esc=v=>String(v??"—").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-const escAttr=v=>esc(v).replace(/"/g,"&quot;").replace(/'/g,"&#39;");
-const dateTime=new Intl.DateTimeFormat('pt-BR',{dateStyle:'medium',timeStyle:'short'});
-function formatDateTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'—':dateTime.format(date)}
-function formatBytes(bytes){if(!Number.isFinite(bytes)||bytes<0)return '—';const units=['B','KB','MB','GB'];let value=bytes,unit=0;while(value>=1024&&unit<units.length-1){value/=1024;unit++}return new Intl.NumberFormat('pt-BR',{maximumFractionDigits:value>=10?0:1}).format(value)+' '+units[unit]}
-function row(k,v){return '<div class="row"><span class="muted">'+k+'</span><strong>'+v+'</strong></div>'}
-async function copyPath(path){try{await navigator.clipboard.writeText(path)}catch(_){const input=document.createElement('textarea');input.value=path;document.body.append(input);input.select();document.execCommand('copy');input.remove()}alert('Caminho copiado.')}
-async function inbound(id,action){const r=await fetch(base+'/api/inbound/'+encodeURIComponent(id)+'/'+action,{method:'POST'});if(!r.ok){alert(await r.text());return}await refresh()}
-async function refresh(){try{const r=await fetch(base+"/api/status",{cache:"no-store"});if(!r.ok)throw new Error('status unavailable');const s=await r.json();const tunnel=s.tunnel?.connected?'<span class="ok">Conectado</span>':'<span class="bad">Desconectado</span>';const items=s.clipboard?.items||[];const clip=s.clipboard?.armed?(items.length?'<span class="ok">'+items.length+' item(ns): '+esc(items.map(i=>i.name||i.kind).join(', '))+'</span>':'<span class="muted">Sem itens</span>'):'<span class="muted">Sem clipboard armado</span>';const expiry=s.clipboard?.armed&&s.clipboard?.expires_at?esc(formatDateTime(s.clipboard.expires_at)):'—';const update=s.release?.update_available?'<div class="row"><span class="bad">Atualização disponível</span><strong><code>'+esc(s.release.latest_version)+'</code> · execute <code>agentclip upgrade</code></strong></div>':(s.release?.error?row('Atualização','<span class="muted">'+esc(s.release.error)+'</span>'):'' );document.querySelector('#status').innerHTML=row('Perfil',esc(s.profile))+row('Servidor','<code>'+esc(s.destination)+'</code>')+row('Túnel',tunnel)+row('Clipboard',clip)+row('Expira',expiry)+(s.tunnel?.last_error?row('Último erro','<span class="bad">'+esc(s.tunnel.last_error)+'</span>'):'')+update;const offers=s.inbound?.offers||[];const received=s.inbound?.received||[];const pending=offers.length?offers.map(o=>'<div class="row"><span><span class="file-name">'+esc(o.name)+'</span><div class="muted metadata">Oferta recebida em '+esc(formatDateTime(o.created_at))+' · '+esc(formatBytes(o.size))+'<br>Expira em '+esc(formatDateTime(o.expires_at))+'</div></span><span class="actions"><button class="btn-accept" onclick="inbound(\''+esc(o.id)+'\',\'accept\')">Aceitar</button><button class="btn-reject" onclick="inbound(\''+esc(o.id)+'\',\'reject\')">Recusar</button></span></div>').join(''):'<p class="muted section-note">Nenhum arquivo aguardando aprovação.</p>';const done=received.length?received.map(o=>'<div class="row"><span><span class="file-name">'+esc(o.name)+'</span><div class="muted metadata">Recebido em '+esc(formatDateTime(o.delivered_at))+' · '+esc(formatBytes(o.size))+'</div><div class="muted metadata file-path">'+esc(o.path)+'</div></span><span class="actions">'+(o.previewable?'<a class="btn-view" target="_blank" rel="noopener" href="'+base+'/api/inbound/'+encodeURIComponent(o.id)+'/content">Abrir conteúdo</a>':'')+'<a class="btn-view" href="'+base+'/api/inbound/'+encodeURIComponent(o.id)+'/download">Baixar</a><button onclick="copyPath(this.dataset.path)" data-path="'+escAttr(o.path)+'">Copiar caminho</button></span></div>').join(''):'<p class="muted section-note">Nenhum arquivo recebido nesta sessão.</p>';document.querySelector('#inbound').innerHTML='<h2>Arquivos do servidor</h2><h3>Aguardando sua aprovação ('+offers.length+')</h3>'+pending+'<h3>Recebidos recentemente ('+received.length+')</h3>'+done;document.querySelector('#updated').textContent='Atualizado às '+formatDateTime(new Date())}catch(e){document.querySelector('#updated').textContent='Não foi possível consultar o Companion'}}
-document.querySelector('#stop').onclick=async()=>{if(confirm('Parar o Companion?')){await fetch(base+'/api/stop',{method:'POST'});setTimeout(refresh,500)}};document.querySelector('#stop').className='btn-stop';refresh();setInterval(refresh,2000);
-</script></html>`

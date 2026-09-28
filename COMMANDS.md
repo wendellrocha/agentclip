@@ -155,13 +155,13 @@ recebimento validado fica em `~/.cache/agentclip/received/` (ou cache
 equivalente) e é removido automaticamente após 30 minutos. Os recebidos exibem
 também a data e hora em que a transferência foi concluída.
 
-Arquivos recebidos de texto, código e dados tabulares exibem também **Abrir
-conteúdo**. O botão abre uma nova aba local com o conteúdo bruto como texto
-simples — apropriado para CSV, TSV, SQL, JSON, YAML e fontes. Ele não executa
-HTML e não é exibido para formatos binários, como imagens e planilhas `.xlsx`.
-Todos os arquivos recebidos exibem ainda **Baixar**, que baixa o original pelo
-endereço privado local, e **Copiar caminho**, para copiar sua localização na
-inbox do AgentClip.
+Arquivos recebidos de texto, código e dados tabulares exibem **Abrir conteúdo**
+e **Copiar conteúdo**. Abrir conteúdo mostra o texto bruto numa nova aba local;
+Copiar conteúdo copia esse texto para a área de transferência. As ações servem
+para CSV, TSV, SQL, JSON, YAML e fontes, não executam HTML e não são exibidas
+para formatos binários, como imagens e planilhas `.xlsx`. Todos os arquivos
+recebidos exibem ainda **Baixar**, que baixa o original pelo endereço privado
+local, e **Copiar caminho**, para copiar sua localização na inbox do AgentClip.
 
 ### `doctor`
 
