@@ -20,6 +20,8 @@ import (
 // Each platform provides nativeSetText, nativeSetImage and nativeSetFiles,
 // which put content on the clipboard the way a real application would, so the
 // production readers are checked against genuine clipboard formats.
+// nativeSetTextExclusive additionally guarantees the clipboard offers text and
+// nothing else, for tests that assert other formats are absent.
 const nativeTestEnv = "AGENTCLIP_NATIVE_CLIPBOARD_TEST"
 
 func requireNativeClipboard(t *testing.T) {
@@ -69,7 +71,7 @@ func TestNativeTextRoundTripKeepsMultibyteUTF8(t *testing.T) {
 
 func TestNativeTextOnlyClipboardHasNoImageAndNoFiles(t *testing.T) {
 	requireNativeClipboard(t)
-	nativeSetText(t, "just text")
+	nativeSetTextExclusive(t, "just text")
 	if img, err := (NativeReader{}).ReadImage(nativeContext(t)); err == nil {
 		t.Fatalf("ReadImage returned %d bytes for a text-only clipboard", len(img))
 	}

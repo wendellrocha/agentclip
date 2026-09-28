@@ -47,3 +47,7 @@ function run(argv) {
 		t.Fatalf("set files: %v: %s", err, out)
 	}
 }
+
+// nativeSetTextExclusive: this platform's clipboard only offers the formats
+// that were written, so plain text is already exclusive.
+func nativeSetTextExclusive(t *testing.T, text string) { nativeSetText(t, text) }

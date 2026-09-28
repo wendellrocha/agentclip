@@ -18,3 +18,8 @@ func nativeSetFiles(t *testing.T, _ ...string) {
 	t.Helper()
 	t.Skip("native clipboard tests are not implemented on this platform")
 }
+
+func nativeSetTextExclusive(t *testing.T, _ string) {
+	t.Helper()
+	t.Skip("native clipboard tests are not implemented on this platform")
+}
