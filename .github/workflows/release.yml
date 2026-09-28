@@ -41,6 +41,16 @@ jobs:
             exit 1
           }
 
+      # Signatures and provenance describe the ref that started this run, so
+      # it must be the release tag that is checked out and built.
+      - name: Require the run ref to be the release tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != "refs/tags/${VERSION}" ]]; then
+            echo "Run this workflow from the ${VERSION} tag (Use workflow from: Tag), not from ${GITHUB_REF}, so signatures and provenance match the built commit." >&2
+            exit 1
+          fi
+
       - name: Test
         run: go test ./...
 

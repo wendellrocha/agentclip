@@ -37,14 +37,27 @@ Para verificar manualmente, baixe o arquivo do release, o `checksums.txt` e o
 `checksums.txt.bundle`:
 
 ```bash
+VERSION=vX.Y.Z
+IDENTITY="https://github.com/wendellrocha/agentclip/.github/workflows/release.yml@refs/tags/${VERSION}"
+
 cosign verify-blob \
   --bundle checksums.txt.bundle \
-  --certificate-identity-regexp '^https://github.com/wendellrocha/agentclip/\.github/workflows/release\.yml@refs/(tags|heads)/.+$' \
+  --certificate-identity "$IDENTITY" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
+
+# Linux
 sha256sum --check --ignore-missing checksums.txt
-gh attestation verify agentclip_vX.Y.Z_linux_amd64.tar.gz --repo wendellrocha/agentclip
+# macOS (não tem sha256sum nem --ignore-missing)
+grep " agentclip_${VERSION}_darwin_arm64.tar.gz$" checksums.txt | shasum -a 256 --check
+
+gh attestation verify "agentclip_${VERSION}_linux_amd64.tar.gz" \
+  --repo wendellrocha/agentclip \
+  --cert-identity "$IDENTITY"
 ```
+
+A identidade exige o ref exato da tag do release, então uma execução do workflow
+a partir de outra branch não é aceita.
 
 Os instaladores e o `agentclip upgrade` verificam apenas o SHA-256; a
 verificação da assinatura é um passo manual.
