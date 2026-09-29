@@ -26,7 +26,8 @@ type Logger struct {
 // maxLogBytes bounds the live log; one previous generation is kept as .1.
 const maxLogBytes = 5 << 20
 
-// ErrNoLog means the profile has never written a log on this machine.
+// ErrNoLog means there is no log file for the profile on this machine. It says
+// nothing about the file's contents: an existing empty log is still a log.
 var ErrNoLog = errors.New("no log for this profile")
 
 // RequireLog checks that a log exists for the profile without creating one, so
@@ -39,8 +40,16 @@ func RequireLog(profile string) error {
 	if err != nil {
 		return fmt.Errorf("find AgentClip cache directory: %w", err)
 	}
-	if info, err := os.Stat(filepath.Join(dir, "agentclip", "logs", profile+".log")); err != nil || !info.Mode().IsRegular() {
+	path := filepath.Join(dir, "agentclip", "logs", profile+".log")
+	info, err := os.Stat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		return fmt.Errorf("%w: %q", ErrNoLog, profile)
+	case err != nil:
+		// Not knowing is different from not existing: say what went wrong.
+		return fmt.Errorf("inspect the log of Companion profile %q: %w", profile, err)
+	case !info.Mode().IsRegular():
+		return fmt.Errorf("the log of Companion profile %q is not a regular file", profile)
 	}
 	return nil
 }
