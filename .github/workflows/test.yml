@@ -56,16 +56,13 @@ jobs:
     name: Native clipboard (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
-    # macOS and Windows runners may not expose a usable clipboard session, so
-    # they report without blocking until they have proven stable.
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, experimental: false }
-          - { os: macos-latest, experimental: true }
-          - { os: windows-latest, experimental: true }
+          - { os: ubuntu-latest }
+          - { os: macos-latest }
+          - { os: windows-latest }
     env:
       AGENTCLIP_NATIVE_CLIPBOARD_TEST: "1"
     steps:
