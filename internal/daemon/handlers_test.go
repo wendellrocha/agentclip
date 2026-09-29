@@ -79,12 +79,25 @@ func TestControlEndpointsRejectInvalidOrOversizedJSON(t *testing.T) {
 			}
 		})
 		t.Run(path+"/oversized", func(t *testing.T) {
-			huge := []byte(`{"padding":"` + strings.Repeat("a", limit+1) + `"}`)
+			// One byte over the limit in total, framing included.
+			framing := len(`{"padding":""}`)
+			huge := []byte(`{"padding":"` + strings.Repeat("a", limit+1-framing) + `"}`)
 			status, body := controlRequest(t, d, http.MethodPost, path, huge)
 			if status != http.StatusBadRequest || strings.TrimSpace(body) != "invalid json" {
 				t.Fatalf("oversized body = %d %q, want 400 \"invalid json\"", status, body)
 			}
 		})
+	}
+}
+
+// A valid value followed by more data is not a valid request either.
+func TestControlEndpointsRejectTrailingData(t *testing.T) {
+	d := startForHandlers(t)
+	for _, body := range []string{`{"current_version":"v1"} {}`, `{"current_version":"v1"} x`} {
+		status, reply := controlRequest(t, d, http.MethodPost, "/v1/control/release", []byte(body))
+		if status != http.StatusBadRequest || strings.TrimSpace(reply) != "invalid json" {
+			t.Fatalf("body %q = %d %q, want 400 \"invalid json\"", body, status, reply)
+		}
 	}
 }
 
