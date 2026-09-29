@@ -200,9 +200,9 @@ agentclip companion autostart status m2
 agentclip companion autostart disable m2
 ```
 
-Desativar remove o serviço, mas não para um Companion que já esteja rodando. Se
-o Companion já estiver rodando quando o login iniciar o serviço, o serviço não
-abre um segundo.
+Desativar remove o serviço e para o Companion que ele iniciou; um Companion que
+você iniciou por conta própria continua rodando. Se o Companion já estiver
+rodando quando o login iniciar o serviço, o serviço não abre um segundo.
 
 Se apenas o **servidor remoto** cair ou for reiniciado enquanto o Companion
 local continua rodando, ele tenta restabelecer o túnel SSH automaticamente,

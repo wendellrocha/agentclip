@@ -139,18 +139,31 @@ func TestWindowsPlanCreatesALogonTaskWithoutFiles(t *testing.T) {
 	}
 }
 
-// fake records effects in order and can be told to fail.
+// fake is a system that remembers what it was told: a service is on after
+// `enable`/`bootstrap`/`/Create` and off after the matching disable, unless that
+// command is made to fail. It records everything in order.
 type fake struct {
 	files    map[string]string
+	dirs     []string
 	commands []string
+	on       bool
 	failOn   string
 }
 
 func (f *fake) runner(goos string) Runner {
 	f.files = map[string]string{}
 	return Runner{
-		GOOS:      goos,
-		WriteFile: func(path string, content []byte) error { f.files[path] = string(content); return nil },
+		GOOS: goos,
+		MkdirAll: func(path string) error {
+			f.dirs = append(f.dirs, path)
+			f.commands = append(f.commands, "mkdir "+path)
+			return nil
+		},
+		WriteFile: func(path string, content []byte) error {
+			f.files[path] = string(content)
+			f.commands = append(f.commands, "write "+path)
+			return nil
+		},
 		Remove: func(path string) error {
 			delete(f.files, path)
 			f.commands = append(f.commands, "rm "+path)
@@ -158,9 +171,20 @@ func (f *fake) runner(goos string) Runner {
 		},
 		Exists: func(path string) bool { _, ok := f.files[path]; return ok },
 		Run: func(command Command) error {
-			f.commands = append(f.commands, command.String())
-			if f.failOn != "" && strings.Contains(command.String(), f.failOn) {
+			text := command.String()
+			f.commands = append(f.commands, text)
+			if f.failOn != "" && strings.Contains(text, f.failOn) {
 				return errors.New("exit status 1")
+			}
+			switch {
+			case strings.Contains(text, "enable --now") || strings.Contains(text, "bootstrap") || strings.Contains(text, "/Create"):
+				f.on = true
+			case strings.Contains(text, "disable --now") || strings.Contains(text, "bootout") || strings.Contains(text, "/Delete"):
+				f.on = false
+			case strings.Contains(text, "is-enabled") || strings.Contains(text, "/Query"):
+				if !f.on {
+					return errors.New("exit status 1")
+				}
 			}
 			return nil
 		},
@@ -176,11 +200,42 @@ func TestEnableWritesUnloadsTheOldDefinitionThenLoads(t *testing.T) {
 	if len(f.files) != 1 {
 		t.Fatalf("files = %v", f.files)
 	}
-	if len(f.commands) != 2 || !strings.HasPrefix(f.commands[0], "launchctl bootout") || !strings.HasPrefix(f.commands[1], "launchctl bootstrap") {
-		t.Fatalf("commands = %v, want bootout (ignored) then bootstrap so that a second enable reloads", f.commands)
+	var loading []string
+	for _, command := range f.commands {
+		if strings.HasPrefix(command, "launchctl") {
+			loading = append(loading, command)
+		}
+	}
+	if len(loading) != 2 || !strings.HasPrefix(loading[0], "launchctl bootout") || !strings.HasPrefix(loading[1], "launchctl bootstrap") {
+		t.Fatalf("commands = %v, want bootout (ignored) then bootstrap so that a second enable reloads", loading)
 	}
 	if on, err := r.Enabled(spec()); err != nil || !on {
 		t.Fatalf("Enabled = %v, %v", on, err)
+	}
+}
+
+// launchd opens the log files before it starts the process and does not create
+// their directory, so on a machine where the Companion never ran the job would
+// fail to launch every time.
+func TestDarwinEnableCreatesTheLogDirectoryBeforeLoadingTheAgent(t *testing.T) {
+	f := &fake{}
+	if err := f.runner("darwin").Enable(spec()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.dirs) != 1 || f.dirs[0] != "/Users/me/Library/Caches/agentclip/logs" {
+		t.Fatalf("directories = %v, want the directory of the log", f.dirs)
+	}
+	mkdir, bootstrap := -1, -1
+	for i, command := range f.commands {
+		if strings.HasPrefix(command, "mkdir ") {
+			mkdir = i
+		}
+		if strings.HasPrefix(command, "launchctl bootstrap") {
+			bootstrap = i
+		}
+	}
+	if mkdir < 0 || bootstrap < 0 || mkdir > bootstrap {
+		t.Fatalf("the directory must exist before bootstrap: %v", f.commands)
 	}
 }
 
@@ -196,21 +251,23 @@ func TestEnableLeavesNothingBehindWhenTheSystemRefusesToStartIt(t *testing.T) {
 	}
 }
 
-func TestDisableStopsRemovesAndSucceedsWhenNothingWasOn(t *testing.T) {
-	f := &fake{failOn: "disable"}
+func TestDisableStopsRemovesAndCanBeRepeated(t *testing.T) {
+	f := &fake{}
 	r := f.runner("linux")
 	if err := r.Enable(spec()); err != nil {
 		t.Fatal(err)
 	}
+	if on, _ := r.Enabled(spec()); !on {
+		t.Fatal("not enabled after Enable")
+	}
 	if err := r.Disable(spec()); err != nil {
-		t.Fatalf("Disable failed although stopping is best effort: %v", err)
+		t.Fatal(err)
 	}
 	if len(f.files) != 0 {
 		t.Fatalf("the unit was not removed: %v", f.files)
 	}
-	last := f.commands[len(f.commands)-1]
-	if last != "systemctl --user daemon-reload" {
-		t.Errorf("last command = %q, want a reload after removing the unit", last)
+	if last := f.commands[len(f.commands)-1]; !strings.Contains(last, "is-enabled") {
+		t.Errorf("last command = %q, want the check that it is really off", last)
 	}
 	if on, _ := r.Enabled(spec()); on {
 		t.Error("still enabled after Disable")
@@ -220,14 +277,88 @@ func TestDisableStopsRemovesAndSucceedsWhenNothingWasOn(t *testing.T) {
 	}
 }
 
+// Turning off what the system refuses to turn off must not report success: a
+// task that stays registered would start at every login.
+func TestDisableReportsAServiceTheSystemWillNotStop(t *testing.T) {
+	for goos, failing := range map[string]string{"windows": "/Delete", "linux": "disable --now"} {
+		t.Run(goos, func(t *testing.T) {
+			f := &fake{}
+			r := f.runner(goos)
+			if err := r.Enable(spec()); err != nil {
+				t.Fatal(err)
+			}
+			f.failOn = failing
+			err := r.Disable(spec())
+			if err == nil || !strings.Contains(err.Error(), "still on") || !strings.Contains(err.Error(), failing) {
+				t.Fatalf("err = %v, want it to say autostart is still on and why", err)
+			}
+		})
+	}
+	// Nothing to turn off is not a failure, even though the command fails.
+	f := &fake{failOn: "/Delete"}
+	if err := f.runner("windows").Disable(spec()); err != nil {
+		t.Fatalf("disabling what was never on failed: %v", err)
+	}
+}
+
+// After `systemctl disable` the unit file is still there, but the login no
+// longer starts it: the status follows the system, not the file.
+func TestLinuxStatusFollowsWhetherTheSystemWillStartIt(t *testing.T) {
+	f := &fake{}
+	r := f.runner("linux")
+	if err := r.Enable(spec()); err != nil {
+		t.Fatal(err)
+	}
+	f.on = false // disabled behind our back; the file remains
+	if len(f.files) != 1 {
+		t.Fatal("the unit file should still exist")
+	}
+	if on, _ := r.Enabled(spec()); on {
+		t.Error("reported as on although the system will not start it")
+	}
+}
+
 func TestWindowsEnabledAsksTheTaskScheduler(t *testing.T) {
 	f := &fake{}
 	r := f.runner("windows")
-	if on, err := r.Enabled(spec()); err != nil || !on {
-		t.Fatalf("Enabled = %v, %v, want on when the query succeeds", on, err)
-	}
-	f.failOn = "/Query"
 	if on, _ := r.Enabled(spec()); on {
-		t.Fatal("Enabled although the task does not exist")
+		t.Fatal("Enabled although no task exists")
+	}
+	if err := r.Enable(spec()); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := r.Enabled(spec()); err != nil || !on {
+		t.Fatalf("Enabled = %v, %v, want on once the task exists", on, err)
+	}
+}
+
+// The service does not inherit the shell that enabled it, so what the profile
+// lookup depends on is written into the definition.
+func TestEnvironmentIsWrittenIntoTheServiceDefinition(t *testing.T) {
+	s := spec()
+	s.Environment = map[string]string{"AGENTCLIP_CONFIG_DIR": "/data/my config & more/%h"}
+	darwin, err := PlanFor("darwin", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := xml.Unmarshal([]byte(darwin.Files[0].Content), new(struct{ XMLName xml.Name })); err != nil {
+		t.Fatalf("plist: %v", err)
+	}
+	if !strings.Contains(darwin.Files[0].Content, "<key>EnvironmentVariables</key>") || !strings.Contains(darwin.Files[0].Content, "<key>AGENTCLIP_CONFIG_DIR</key>\n\t\t<string>/data/my config &amp; more/%h</string>") {
+		t.Errorf("plist lacks the environment:\n%s", darwin.Files[0].Content)
+	}
+	linux, err := PlanFor("linux", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(linux.Files[0].Content, `Environment="AGENTCLIP_CONFIG_DIR=/data/my config & more/%%h"`) {
+		t.Errorf("unit lacks the quoted environment (specifiers doubled):\n%s", linux.Files[0].Content)
+	}
+	if _, err := PlanFor("windows", s); err == nil || !strings.Contains(err.Error(), "AGENTCLIP_CONFIG_DIR") {
+		t.Errorf("a Windows task cannot carry the environment; err = %v", err)
+	}
+	plain, _ := PlanFor("darwin", spec())
+	if strings.Contains(plain.Files[0].Content, "EnvironmentVariables") {
+		t.Error("an empty environment must not add a section")
 	}
 }

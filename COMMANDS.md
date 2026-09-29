@@ -115,9 +115,19 @@ Gerencia a parte local persistente do AgentClip.
   perfil precisa existir. O serviço não abre um segundo Companion se já houver
   um rodando para o perfil.
 - `autostart disable`: para o serviço e remove os arquivos que o `enable`
-  criou; um Companion que já esteja rodando continua rodando. Pode ser repetido
-  sem erro.
-- `autostart status`: diz se o perfil sobe no login.
+  criou. O Companion que o serviço iniciou é parado; um que você iniciou por
+  conta própria continua rodando. Pode ser repetido sem erro, mas se o sistema
+  se recusar a desligar o serviço o comando falha em vez de dizer que deu certo.
+- `autostart status`: diz se o perfil sobe no login. No Linux e no Windows a
+  resposta vem do próprio sistema (`systemctl is-enabled`, Agendador de
+  Tarefas); no macOS, do LaunchAgent existir em `~/Library/LaunchAgents`, que
+  é o que o faz carregar no login.
+
+Um serviço de login não herda o seu terminal. Se o perfil está em um diretório
+dado por `AGENTCLIP_CONFIG_DIR`, o `enable` grava essa variável na definição do
+serviço (LaunchAgent e systemd); no Windows, onde a tarefa não carrega variáveis,
+o `enable` recusa e explica. O diretório de logs do macOS é criado no `enable`,
+porque o launchd abre os arquivos de log antes de iniciar o processo.
 
 ### `upgrade`
 
