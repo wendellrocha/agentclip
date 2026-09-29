@@ -79,23 +79,20 @@ func TestControlServerServesPrivateStatusViewAndStop(t *testing.T) {
 			t.Fatalf("dashboard markup missing %q", expected)
 		}
 	}
-	fileCardStart := strings.Index(string(markup), "function fileCard(o){")
-	if fileCardStart < 0 {
+	// The copy action belongs to previewable files only: it lives in its own
+	// function, which the file card calls only under o.previewable.
+	source := string(script)
+	cardStart := strings.Index(source, "function fileCard(o){")
+	cardEnd := strings.Index(source, "function offerRow(")
+	if cardStart < 0 || cardEnd < cardStart {
 		t.Fatal("dashboard file card renderer missing")
 	}
-	fileCardEnd := strings.Index(string(markup)[fileCardStart:], "async function refresh()")
-	if fileCardEnd < 0 {
-		t.Fatal("dashboard file card renderer boundary missing")
-	}
-	fileCard := string(markup)[fileCardStart : fileCardStart+fileCardEnd]
-	previewBranch := strings.Index(fileCard, "o.previewable?")
-	copyButton := strings.Index(fileCard, ">Copiar conteúdo</button>")
-	if previewBranch < 0 || copyButton < 0 {
-		t.Fatal("previewable file copy action missing")
-	}
-	previewBranchEnd := strings.Index(fileCard[previewBranch:], "':'')")
-	if previewBranchEnd < 0 || copyButton < previewBranch || copyButton > previewBranch+previewBranchEnd {
+	card := source[cardStart:cardEnd]
+	if strings.Contains(card, "Copiar conteúdo") || !strings.Contains(card, "o.previewable ? previewActions(o) : []") {
 		t.Fatal("Copiar conteúdo must be rendered only inside the previewable file branch")
+	}
+	if !strings.Contains(source, "function previewActions(o)") || strings.Count(source, "Copiar conteúdo") != 1 {
+		t.Fatal("Copiar conteúdo must exist once, in previewActions")
 	}
 	if err := StopRuntime(state); err != nil {
 		t.Fatal(err)
@@ -195,6 +192,25 @@ func TestDashboardCSPForbidsInlineCodeAndThePageNeedsNone(t *testing.T) {
 	}
 	if match := regexp.MustCompile(`(?i)\sstyle=|\son(click|error|load|mouse[a-z]*)=|javascript:|setAttribute\(.style`).FindString(string(script)); match != "" {
 		t.Errorf("app.js builds markup the policy would block (%q)", match)
+	}
+}
+
+// File names, paths and error messages come from the remote server, so the page
+// must never turn a string into markup. The script builds nodes with textContent
+// semantics (see h); this keeps anyone from quietly bringing HTML strings back.
+func TestDashboardScriptNeverBuildsMarkupFromStrings(t *testing.T) {
+	script, err := dashboardFiles.ReadFile("ui/assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "createContextualFragment", "DOMParser", "eval(", "new Function", "srcdoc"} {
+		if strings.Contains(string(script), forbidden) {
+			t.Errorf("app.js uses %s, which can turn server text into markup", forbidden)
+		}
+	}
+	// The only way to build an element is h, whose string children are text nodes.
+	if !strings.Contains(string(script), "document.createTextNode(String(child))") {
+		t.Error("h must turn string children into text nodes")
 	}
 }
 
