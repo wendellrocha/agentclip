@@ -53,7 +53,7 @@ func (s HostSnapshotSource) ReadSnapshot(ctx context.Context) ([]bridge.Item, er
 	if err == nil && len(paths) > 0 {
 		items := make([]bridge.Item, 0, len(paths))
 		for _, path := range paths {
-			item, err := bridge.FileItem(path, mime.TypeByExtension(strings.ToLower(filepath.Ext(path))))
+			item, err := bridge.FilePathItem(path, mime.TypeByExtension(strings.ToLower(filepath.Ext(path))))
 			if err != nil {
 				return nil, fmt.Errorf("prepare clipboard file %q: %w", filepath.Base(path), err)
 			}
