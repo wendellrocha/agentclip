@@ -1,5 +1,7 @@
 # AgentClip
 
+**Português** · [English](README.en.md)
+
 AgentClip disponibiliza, sob autorização explícita, imagens, texto e arquivos
 do clipboard do host a um agente de código rodando em um servidor SSH.
 
