@@ -74,8 +74,9 @@ func TestServerLifecycleSetupConnectUninstall(t *testing.T) {
 	if err != nil || repaired.Token == profile.Token {
 		t.Fatalf("a second setup must issue a new pairing token (err %v)", err)
 	}
-	if got := logged(); len(got) != 4 {
-		t.Fatalf("harness calls after the second setup = %q", got)
+	got := logged()
+	if len(got) != 4 || got[2] != "codex mcp remove agentclip-e2e" || !strings.Contains(got[3], "AGENTCLIP_SESSION_TOKEN="+repaired.Token) || strings.Contains(got[3], profile.Token) {
+		t.Fatalf("harness calls after the second setup = %q, want the re-registration to carry the new token and not the old one", got)
 	}
 
 	// connect registers the saved profile again, without touching the profile.
@@ -90,8 +91,8 @@ func TestServerLifecycleSetupConnectUninstall(t *testing.T) {
 	if err := runUninstall([]string{"e2e", "--agent", "codex"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := logged(); got[len(got)-1] != "codex mcp remove agentclip-e2e" {
-		t.Fatalf("last harness call = %q, want the removal of agentclip-e2e", got[len(got)-1])
+	if got := logged(); len(got) != 7 || got[6] != "codex mcp remove agentclip-e2e" {
+		t.Fatalf("harness calls after uninstall = %q, want exactly one more: the removal of agentclip-e2e", got)
 	}
 }
 
