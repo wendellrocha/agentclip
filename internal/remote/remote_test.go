@@ -83,9 +83,9 @@ func fakeSSH(t *testing.T) (home string) {
 
 func stubFetch(t *testing.T, content string, notice string, captured *upgrader.Options) {
 	t.Helper()
-	previous := fetchRelease
-	t.Cleanup(func() { fetchRelease = previous })
-	fetchRelease = func(_ context.Context, options upgrader.Options) (upgrader.Fetched, error) {
+	previous := FetchRelease
+	t.Cleanup(func() { FetchRelease = previous })
+	FetchRelease = func(_ context.Context, options upgrader.Options) (upgrader.Fetched, error) {
 		if captured != nil {
 			*captured = options
 		}
@@ -149,8 +149,8 @@ func TestInstallVerifiedNeverDowngradesAndSkipsWhatIsAlreadyThere(t *testing.T) 
 			}
 			fetched := false
 			stubFetch(t, "new binary", "", nil)
-			inner := fetchRelease
-			fetchRelease = func(ctx context.Context, options upgrader.Options) (upgrader.Fetched, error) {
+			inner := FetchRelease
+			FetchRelease = func(ctx context.Context, options upgrader.Options) (upgrader.Fetched, error) {
 				fetched = true
 				return inner(ctx, options)
 			}
@@ -203,9 +203,9 @@ func TestInstallVerifiedRefusesUnverifiedAndDamagedBinaries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	previous := fetchRelease
-	t.Cleanup(func() { fetchRelease = previous })
-	fetchRelease = func(context.Context, upgrader.Options) (upgrader.Fetched, error) {
+	previous := FetchRelease
+	t.Cleanup(func() { FetchRelease = previous })
+	FetchRelease = func(context.Context, upgrader.Options) (upgrader.Fetched, error) {
 		return upgrader.Fetched{}, errors.New("release checksum does not match checksums.txt")
 	}
 	_, err := InstallVerified(context.Background(), "host", "", "v0.7.2", nil)
@@ -339,8 +339,8 @@ func TestInstallVerifiedStopsWhenItsContextIsDone(t *testing.T) {
 	home := fakeSSH(t)
 	fetched := false
 	stubFetch(t, "binary", "", nil)
-	inner := fetchRelease
-	fetchRelease = func(ctx context.Context, options upgrader.Options) (upgrader.Fetched, error) {
+	inner := FetchRelease
+	FetchRelease = func(ctx context.Context, options upgrader.Options) (upgrader.Fetched, error) {
 		fetched = true
 		return inner(ctx, options)
 	}
