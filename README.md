@@ -193,7 +193,8 @@ agentclip companion start m2
 
 Se apenas o **servidor remoto** cair ou for reiniciado enquanto o Companion
 local continua rodando, ele tenta restabelecer o túnel SSH automaticamente,
-com espera progressiva de 1 a 30 segundos. Quando a conexão voltar, o mesmo
+com espera progressiva de 1 a 30 segundos (que recomeça em 1 segundo depois de
+um túnel que ficou de pé por pelo menos um minuto). Quando a conexão voltar, o mesmo
 perfil e a mesma porta remota voltam a ser usados. Se quiser que o Companion
 suba junto com o sistema, use o gerenciador de serviços do seu sistema
 operacional para executar explicitamente `agentclip companion start <perfil>`
