@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -38,6 +37,7 @@ import (
 	"github.com/wendellrocha/agentclip/internal/release"
 	"github.com/wendellrocha/agentclip/internal/remote"
 	"github.com/wendellrocha/agentclip/internal/selfupgrade"
+	"github.com/wendellrocha/agentclip/internal/setup"
 	"github.com/wendellrocha/agentclip/internal/sshsession"
 	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
@@ -48,8 +48,6 @@ const (
 	remotePortMin    = 32000
 	remotePortMax    = 44999
 )
-
-var releaseTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$`)
 
 type bridgeBootstrap struct {
 	Image        *daemon.Image `json:"image,omitempty"`
@@ -258,71 +256,26 @@ func runPair(arguments []string) error {
 }
 
 func runSetup(arguments []string) error {
-	if len(arguments) < 1 {
-		return errors.New("usage: agentclip setup <ssh-destination> [--profile NAME] [--agent all|codex|claude|gemini|agy|opencode|pi] [--version vX.Y.Z] [--remote-port 39123] [--skip-agent] [--skip-install] [--no-start]")
-	}
-	if strings.HasPrefix(arguments[0], "-") {
-		return errors.New("SSH destination must not start with a dash")
-	}
-	settings := flag.NewFlagSet("setup", flag.ContinueOnError)
-	settings.SetOutput(io.Discard)
-	profileName := settings.String("profile", "", "local Companion profile name")
-	agent := settings.String("agent", "all", "remote agent: all, codex, claude, gemini, agy, opencode, or pi")
-	releaseVersion := settings.String("version", "", "AgentClip release tag to install remotely")
-	remotePort := settings.Int("remote-port", 39123, "remote loopback port")
-	skipAgent := settings.Bool("skip-agent", false, "do not configure an agent on the server")
-	skipCodex := settings.Bool("skip-codex", false, "deprecated alias for --skip-agent")
-	skipInstall := settings.Bool("skip-install", false, "do not install AgentClip on the server")
-	noStart := settings.Bool("no-start", false, "do not start the local Companion")
-	if err := settings.Parse(arguments[1:]); err != nil {
-		return fmt.Errorf("parse setup options: %w", err)
-	}
-	if settings.NArg() != 0 {
-		return fmt.Errorf("unexpected setup arguments: %s", strings.Join(settings.Args(), " "))
-	}
-
-	name := *profileName
-	if name == "" {
-		name = defaultProfileName(arguments[0])
-	}
-	existingIdentityFile := ""
-	if existing, err := companion.LoadProfile(name); err == nil {
-		existingIdentityFile = existing.SSHIdentityFile
-	}
-	identityFile, err := remote.EnsureSetupSSHIdentity(arguments[0], name, existingIdentityFile)
+	options, err := setup.ParseArgs(arguments)
 	if err != nil {
 		return err
 	}
-	if !*skipInstall {
-		tag, err := releaseTag(*releaseVersion)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Installing AgentClip %s on %s...\n", tag, arguments[0])
-		if err := remote.InstallCommandWithIdentity(arguments[0], identityFile, tag).Run(); err != nil {
-			return fmt.Errorf("install AgentClip on %s: %w", arguments[0], err)
-		}
-	}
-
-	// A running Companion would retain its old pairing token after re-setup.
-	if state, err := companion.LoadRuntime(name); err == nil && companion.RuntimeHealthy(state) {
-		if err := stopCompanion(name); err != nil {
-			return err
-		}
-	}
-	profile, err := pairProfileWithIdentity(name, arguments[0], *remotePort, *agent, *skipAgent || *skipCodex, identityFile)
-	if err != nil {
-		return err
-	}
-	if *noStart {
-		fmt.Printf("Setup complete for %q. Start it with: agentclip companion start %s\n", profile.Name, profile.Name)
-		return nil
-	}
-	if err := startCompanion(profile.Name, false); err != nil {
-		return err
-	}
-	fmt.Printf("Setup complete for %q. SSH normally, then ask your agent to inspect the clipboard.\n", profile.Name)
-	return nil
+	return setup.Runner{
+		Stdout:         os.Stdout,
+		LoadProfile:    companion.LoadProfile,
+		EnsureIdentity: remote.EnsureSetupSSHIdentity,
+		ReleaseTag:     setup.ReleaseTag,
+		Install: func(destination, identityFile, tag string) error {
+			return remote.InstallCommandWithIdentity(destination, identityFile, tag).Run()
+		},
+		CompanionRunning: func(name string) bool {
+			state, err := companion.LoadRuntime(name)
+			return err == nil && companion.RuntimeHealthy(state)
+		},
+		StopCompanion:  stopCompanion,
+		Pair:           pairProfileWithIdentity,
+		StartCompanion: func(name string) error { return startCompanion(name, false) },
+	}.Run(options)
 }
 
 func runConnect(arguments []string) error {
@@ -409,48 +362,6 @@ func pairProfileWithIdentity(name, destination string, remotePort int, agent str
 		return companion.Profile{}, err
 	}
 	return profile, nil
-}
-
-func releaseTag(requested string) (string, error) {
-	tag := strings.TrimSpace(requested)
-	if tag == "" {
-		tag = buildinfo.Version
-	}
-	if !strings.HasPrefix(tag, "v") {
-		tag = "v" + tag
-	}
-	if strings.Contains(tag, "-dev") {
-		return "", errors.New("the development build has no downloadable release; pass --version vX.Y.Z after publishing it, or use `pair` for a manual development setup")
-	}
-	if !releaseTagPattern.MatchString(tag) {
-		return "", fmt.Errorf("release version must be a semantic tag such as v0.2.0, got %q", tag)
-	}
-	return tag, nil
-}
-
-func defaultProfileName(destination string) string {
-	name := destination
-	if index := strings.LastIndex(name, "@"); index >= 0 {
-		name = name[index+1:]
-	}
-	var builder strings.Builder
-	for _, character := range name {
-		valid := (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-			(character >= '0' && character <= '9') || character == '-' || character == '_'
-		if valid {
-			builder.WriteRune(character)
-		} else if builder.Len() == 0 || !strings.HasSuffix(builder.String(), "-") {
-			builder.WriteByte('-')
-		}
-	}
-	name = strings.Trim(builder.String(), "-_")
-	if name == "" {
-		name = "server"
-	}
-	if len(name) > 64 {
-		name = name[:64]
-	}
-	return name
 }
 
 func runCompanion(arguments []string) error {
