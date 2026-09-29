@@ -42,7 +42,9 @@ type snapshotItemRequest struct {
 	Data     string          `json:"data,omitempty"`
 	Width    int             `json:"width,omitempty"`
 	Height   int             `json:"height,omitempty"`
-	File     *bridge.FileRef `json:"file,omitempty"`
+	// Path names a local file to arm. Its size, time and SHA-256 are measured by
+	// the bridge, never supplied by the caller.
+	Path string `json:"path,omitempty"`
 }
 type persistentSessionRequest struct {
 	ID          string `json:"id"`
@@ -187,7 +189,16 @@ func (d *Daemon) snapshot(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		items = append(items, bridge.Item{ID: input.ID, Kind: input.Kind, MIMEType: input.MIMEType, Name: input.Name, Data: data, Width: input.Width, Height: input.Height, File: input.File})
+		item := bridge.Item{ID: input.ID, Kind: input.Kind, MIMEType: input.MIMEType, Name: input.Name, Data: data, Width: input.Width, Height: input.Height}
+		if input.Kind == bridge.ItemFile {
+			file, err := bridge.FileItem(input.Path, input.MIMEType)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			item.File = file.File
+		}
+		items = append(items, item)
 	}
 	snapshot, err := d.Bridge.ArmItems(items)
 	if err != nil {

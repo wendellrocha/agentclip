@@ -57,13 +57,16 @@ func ArmSnapshot(state daemon.State, items []bridge.Item) error {
 		Data     string          `json:"data,omitempty"`
 		Width    int             `json:"width,omitempty"`
 		Height   int             `json:"height,omitempty"`
-		File     *bridge.FileRef `json:"file,omitempty"`
+		Path     string          `json:"path,omitempty"`
 	}
 	payload := struct {
 		Items []snapshotItem `json:"items"`
 	}{Items: make([]snapshotItem, 0, len(items))}
 	for _, item := range items {
-		entry := snapshotItem{ID: item.ID, Kind: item.Kind, MIMEType: item.MIMEType, Name: item.Name, Width: item.Width, Height: item.Height, File: item.File}
+		entry := snapshotItem{ID: item.ID, Kind: item.Kind, MIMEType: item.MIMEType, Name: item.Name, Width: item.Width, Height: item.Height}
+		if item.File != nil {
+			entry.Path = item.File.Path
+		}
 		if len(item.Data) > 0 {
 			entry.Data = base64.StdEncoding.EncodeToString(item.Data)
 		}

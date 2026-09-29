@@ -272,33 +272,59 @@ func prepareItem(item Item) (*armedItem, error) {
 }
 
 // FileItem creates a verified local file item without exposing the path to a
-// remote caller. MIME is metadata only and may be empty.
+// remote caller. MIME is metadata only and may be empty. Size, modification time
+// and SHA-256 are always measured here, never taken from the caller.
 func FileItem(path, mime string) (Item, error) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return Item{}, ErrInvalidFile
+	file, info, err := openRegularFile(path)
+	if err != nil {
+		return Item{}, err
 	}
+	defer file.Close()
 	if info.Size() > MaxFileBytes {
 		return Item{}, ErrFileTooLarge
 	}
-	sum, err := hashFile(path)
-	if err != nil {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.LimitReader(file, MaxFileBytes+1)); err != nil {
 		return Item{}, ErrInvalidFile
 	}
-	return Item{Kind: ItemFile, MIMEType: mime, Name: filepath.Base(path), File: &FileRef{Path: path, Size: info.Size(), ModTime: info.ModTime(), SHA256: sum}}, nil
+	return Item{Kind: ItemFile, MIMEType: mime, Name: filepath.Base(path), File: &FileRef{Path: path, Size: info.Size(), ModTime: info.ModTime(), SHA256: hex.EncodeToString(hash.Sum(nil))}}, nil
+}
+
+// openRegularFile is the one place a local path becomes an open file. The path
+// names one absolute, normalized location (never relative to the bridge's
+// working directory, or with ".." segments) and must be a regular file that is
+// not a symlink. It is opened once and every later check uses that descriptor,
+// so the file cannot be swapped between checking and reading it.
+func openRegularFile(path string) (*os.File, os.FileInfo, error) {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, nil, ErrInvalidFile
+	}
+	linkInfo, err := os.Lstat(path)
+	if err != nil || !linkInfo.Mode().IsRegular() {
+		return nil, nil, ErrInvalidFile
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, ErrInvalidFile
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(linkInfo, info) {
+		file.Close()
+		return nil, nil, ErrInvalidFile
+	}
+	return file, info, nil
 }
 
 func validateFileRef(ref FileRef) (FileRef, error) {
-	if ref.Path == "" || ref.Size < 0 || ref.Size > MaxFileBytes || ref.SHA256 == "" {
+	if ref.Size < 0 || ref.Size > MaxFileBytes || ref.SHA256 == "" {
 		return FileRef{}, ErrInvalidFile
 	}
-	// A file reference names one absolute, normalized path: never something
-	// relative to the bridge's working directory, or with ".." segments.
-	if !filepath.IsAbs(ref.Path) || filepath.Clean(ref.Path) != ref.Path {
-		return FileRef{}, ErrInvalidFile
+	file, info, err := openRegularFile(ref.Path)
+	if err != nil {
+		return FileRef{}, err
 	}
-	info, err := os.Lstat(ref.Path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() != ref.Size || !info.ModTime().Equal(ref.ModTime) {
+	file.Close()
+	if info.Size() != ref.Size || !info.ModTime().Equal(ref.ModTime) {
 		return FileRef{}, ErrInvalidFile
 	}
 	return ref, nil
@@ -600,15 +626,14 @@ func (b *Bridge) snapshotAllowedLocked(session *Session) bool {
 }
 
 func openVerifiedFile(ref FileRef) (*os.File, error) {
-	if _, err := validateFileRef(ref); err != nil {
-		return nil, err
+	if ref.Size < 0 || ref.Size > MaxFileBytes || ref.SHA256 == "" {
+		return nil, ErrInvalidFile
 	}
-	file, err := os.Open(ref.Path)
+	file, info, err := openRegularFile(ref.Path)
 	if err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() != ref.Size || !info.ModTime().Equal(ref.ModTime) {
+	if info.Size() != ref.Size || !info.ModTime().Equal(ref.ModTime) {
 		file.Close()
 		return nil, ErrInvalidFile
 	}
@@ -622,19 +647,6 @@ func openVerifiedFile(ref FileRef) (*os.File, error) {
 		return nil, err
 	}
 	return file, nil
-}
-
-func hashFile(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, io.LimitReader(file, MaxFileBytes+1)); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func copySnapshot(snapshot *Snapshot) Snapshot {
