@@ -27,9 +27,9 @@ type harness struct {
 	active   []string
 	notice   string
 
-	latestErr, prepareErr, profilesErr, activeErr, stopErr, replaceErr, restartErr, windowsErr error
-	remoteErrs                                                                                 map[string]error
-	restarted                                                                                  [][]string
+	latestErr, executableErr, prepareErr, profilesErr, activeErr, stopErr, replaceErr, restartErr, windowsErr error
+	remoteErrs                                                                                                map[string]error
+	restarted                                                                                                 [][]string
 
 	runner Runner
 }
@@ -51,7 +51,7 @@ func newHarness(t *testing.T) *harness {
 		},
 		Executable: func() (string, error) {
 			h.calls = append(h.calls, "executable")
-			return h.target, nil
+			return h.target, h.executableErr
 		},
 		Prepare: func(_ context.Context, tag, executable string) (upgrader.StagedBinary, error) {
 			h.calls = append(h.calls, "prepare "+tag)
@@ -176,6 +176,19 @@ func TestUpgradeStopsBeforeAnyEffectWhenTheReleaseCannotBeResolved(t *testing.T)
 		t.Fatalf("err = %v", err)
 	}
 	h.expectCalls("latest")
+}
+
+func TestUpgradeStopsBeforePreparingWhenTheRunningExecutableCannotBeLocated(t *testing.T) {
+	h := newHarness(t)
+	h.profiles = []companion.Profile{profile("m2")}
+	h.executableErr = errors.New("no such file")
+	err := h.run()
+	if err == nil || !strings.Contains(err.Error(), "locate running AgentClip executable") || !errors.Is(err, h.executableErr) {
+		t.Fatalf("err = %v", err)
+	}
+	// Without a target there is nothing to replace, so nothing is downloaded,
+	// staged or run anywhere.
+	h.expectCalls("latest", "executable")
 }
 
 func TestUpgradeTouchesNothingWhenThePreparedBinaryIsRefused(t *testing.T) {
