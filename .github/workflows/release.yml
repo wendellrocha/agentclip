@@ -102,13 +102,24 @@ jobs:
             go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode=binary "$binary"
           done
 
-      # A CycloneDX inventory of the modules compiled into the binaries, published
-      # with the release and covered by the checksums and the attestation.
-      - name: Generate the SBOM
-        run: >
-          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
-          app -json -licenses=false -std=false -main cmd/agentclip
-          -output "dist/agentclip_${VERSION}_sbom.cdx.json"
+      # A CycloneDX inventory of the modules compiled into each binary, published
+      # with the release and covered by the checksums and the attestation. There is
+      # one per platform because the dependencies differ: the clipboard library
+      # pulls in purego on macOS and not on Linux or Windows. The tool is installed
+      # once for the runner, since `go run` with GOOS set would build the tool
+      # itself for the target.
+      - name: Generate the SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" "$RUNNER_TEMP/bin/cyclonedx-gomod" app \
+              -json -licenses=false -std=false -main cmd/agentclip \
+              -output "dist/agentclip_${VERSION}_${os}_${arch}.cdx.json"
+          done
 
       - name: Checksums
         shell: bash
