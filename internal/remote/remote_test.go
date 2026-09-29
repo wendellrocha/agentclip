@@ -136,6 +136,51 @@ func TestInstallVerifiedSendsTheVerifiedBinaryWithoutRunningAScriptFromTheNetwor
 	}
 }
 
+// The previous installer never downgraded a server and did nothing when the
+// version was already there; setup from an older client must keep that.
+func TestInstallVerifiedNeverDowngradesAndSkipsWhatIsAlreadyThere(t *testing.T) {
+	for _, test := range []struct {
+		name, installed string
+		wantReplaced    bool
+	}{
+		{"older is replaced", "v0.7.1", true},
+		{"same is left alone", "v0.7.2", false},
+		{"newer is left alone", "v0.9.0", false},
+		{"a newer pre-release is left alone", "v0.8.0-rc.1", false},
+		{"unreadable output is replaced", "not a version", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := fakeSSH(t)
+			installed := filepath.Join(home, ".local", "bin", "agentclip")
+			if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(installed, []byte("#!/bin/sh\necho '"+test.installed+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			fetched := false
+			stubFetch(t, "new binary", "", nil)
+			inner := fetchRelease
+			fetchRelease = func(ctx context.Context, options upgrader.Options) (upgrader.Fetched, error) {
+				fetched = true
+				return inner(ctx, options)
+			}
+			var stderr strings.Builder
+			if err := InstallVerified(context.Background(), "host", "", "v0.7.2", &stderr); err != nil {
+				t.Fatal(err)
+			}
+			data, _ := os.ReadFile(installed)
+			replaced := string(data) == "new binary"
+			if replaced != test.wantReplaced || fetched != test.wantReplaced {
+				t.Fatalf("replaced = %v, downloaded = %v, want %v (stderr %q)", replaced, fetched, test.wantReplaced, stderr.String())
+			}
+			if !test.wantReplaced && stderr.Len() == 0 {
+				t.Error("leaving the server alone was not explained")
+			}
+		})
+	}
+}
+
 func TestInstallVerifiedForwardsTheAttestationOptOutOnlyWhenExplicitlySet(t *testing.T) {
 	for value, want := range map[string]bool{"1": true, "": false, "0": false, "true": false} {
 		t.Run("value="+value, func(t *testing.T) {

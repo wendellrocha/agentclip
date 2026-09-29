@@ -85,9 +85,11 @@ installation is refused.
 - **`agentclip upgrade`:** queries the GitHub attestations API.
 - **Servers (`agentclip setup` and `agentclip upgrade`):** this machine downloads
   the binary for the server's platform, verifies it the way `upgrade` does and
-  sends it over the SSH connection. No script is downloaded or run on the
-  server, which only checks that the SHA-256 of what it received is the verified
-  binary's; a truncated transfer never replaces the binary that already works.
+  sends it over the SSH connection. No installer is downloaded to the server: it
+  only runs a short, fixed sequence of commands that checks the SHA-256 of what
+  it received against the verified binary's and moves the file into place; a
+  truncated transfer never replaces the binary that already works. A server that
+  already has the same version, or a newer one, is left unchanged.
 
 The API lookup confirms that the repository holds an attestation for exactly the
 file's SHA-256, made by `release.yml` on the version's tag, which stops release

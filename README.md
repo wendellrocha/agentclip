@@ -82,9 +82,11 @@ instalação é recusada.
 - **`agentclip upgrade`:** consulta a API de atestados do GitHub.
 - **Servidores (`agentclip setup` e `agentclip upgrade`):** esta máquina baixa o
   binário da plataforma do servidor, faz a mesma verificação do `upgrade` e o
-  envia pela conexão SSH. Nenhum script é baixado ou executado no servidor, que
-  só confere se o SHA-256 do que recebeu é o do binário verificado; um envio
-  truncado nunca substitui o binário que já funciona.
+  envia pela conexão SSH. Nenhum instalador é baixado para o servidor: ele só
+  executa uma sequência curta e fixa de comandos que confere se o SHA-256 do que
+  recebeu é o do binário verificado e move o arquivo para o lugar; um envio
+  truncado nunca substitui o binário que já funciona. Um servidor que já tem a
+  mesma versão, ou uma mais nova, não é alterado.
 
 A consulta à API confirma que o repositório tem um atestado para exatamente o
 SHA-256 do arquivo, feito pelo `release.yml` na tag da versão, o que impede a

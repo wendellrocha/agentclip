@@ -19,10 +19,6 @@ import (
 	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
 
-const (
-	releaseRepository = "wendellrocha/agentclip"
-)
-
 func remotePreflightCommand(destination, agentExecutable string) *exec.Cmd {
 	return remotePreflightCommandWithIdentity(destination, "", agentExecutable)
 }
@@ -47,10 +43,14 @@ const MinRemoteVersion = "v0.5.0"
 
 // VersionForProfile asks the server which agentclip it would run.
 func VersionForProfile(profile companion.Profile) *exec.Cmd {
+	return versionCommand(profile.Destination, profile.SSHIdentityFile)
+}
+
+func versionCommand(destination, identityFile string) *exec.Cmd {
 	// A login shell may print a banner or a warning first, so the version is
 	// marked and CheckVersion reads only the marked line.
 	script := "export PATH=\"$HOME/.local/bin:$PATH\"; printf '" + versionMarker + "%s\\n' \"$(agentclip version 2>/dev/null)\""
-	return remoteSSHCommand(profile.Destination, profile.SSHIdentityFile, "sh -lc "+shellQuote(script))
+	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(script))
 }
 
 // versionMarker prefixes the line that carries the server's version.
@@ -322,13 +322,44 @@ func uploadCommand(destination, identityFile, digest string) *exec.Cmd {
 // fetchRelease is upgrader.Fetch, replaceable in tests.
 var fetchRelease = upgrader.Fetch
 
-// InstallVerified puts the release binary for tag on the server without running
-// any script there. This machine downloads the binary for the server's platform
-// and verifies it (checksum, and the build attestation for releases that have
-// one), then sends it over the existing SSH connection; the server only
-// confirms the bytes it received are the ones verified. Notices about checks
-// that did not apply go to stderr.
+// installedVersion reads the version of the agentclip already on the server, or
+// "" when there is none or its output cannot be read as a version.
+func installedVersion(destination, identityFile string) string {
+	output, err := versionCommand(destination, identityFile).Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if value, found := strings.CutPrefix(strings.TrimSpace(line), versionMarker); found {
+			if _, err := release.Compare(strings.TrimSpace(value), "v0.0.0"); err == nil {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
+}
+
+// InstallVerified puts the release binary for tag on the server without
+// downloading an installer script to it. This machine downloads the
+// binary for the server's platform and verifies it (checksum, and the build
+// attestation for releases that have one), then sends it over the existing SSH
+// connection. The server runs only a short fixed command sequence: it confirms
+// the bytes it received are the ones verified, then moves them into place.
+// A server that already has this version, or a newer one, is left alone.
+// Notices about checks that did not apply go to stderr.
 func InstallVerified(ctx context.Context, destination, identityFile, tag string, stderr io.Writer) error {
+	if installed := installedVersion(destination, identityFile); installed != "" {
+		if comparison, err := release.Compare(tag, installed); err == nil && comparison <= 0 {
+			if stderr != nil {
+				if comparison == 0 {
+					fmt.Fprintf(stderr, "AgentClip %s is already installed on %s.\n", installed, destination)
+				} else {
+					fmt.Fprintf(stderr, "%s has AgentClip %s, newer than %s; leaving it unchanged.\n", destination, installed, tag)
+				}
+			}
+			return nil
+		}
+	}
 	output, err := platformCommand(destination, identityFile).Output()
 	if err != nil {
 		return fmt.Errorf("read the platform of %s: %w", destination, err)
