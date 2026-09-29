@@ -52,15 +52,68 @@ func TestDesignSystemStylesAreASubsetOfTheDashboardStyles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inDashboard := map[string]bool{}
-	for _, line := range strings.Split(string(dashboard), "\n") {
-		inDashboard[strings.TrimSpace(line)] = true
-	}
-	for number, line := range strings.Split(string(design), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !inDashboard[line] {
-			t.Errorf("design-systems styles.css line %d is not in the dashboard stylesheet (change both together):\n\t%s", number+1, line)
+	dashboardRules := parseCSSDeclarations(string(dashboard))
+	for key, declarations := range parseCSSDeclarations(string(design)) {
+		for declaration := range declarations {
+			if !dashboardRules[key][declaration] {
+				t.Errorf("design-systems styles.css has %q in %s, but the dashboard stylesheet does not (change both together)", declaration, key)
+			}
 		}
+	}
+}
+
+// parseCSSDeclarations maps "selector" (or "@media ... > selector") to the set
+// of declarations written under it, so a declaration moved to another rule is a
+// difference even though the line itself still exists somewhere.
+func parseCSSDeclarations(css string) map[string]map[string]bool {
+	rules := map[string]map[string]bool{}
+	var walk func(context string, text string)
+	walk = func(context string, text string) {
+		for {
+			open := strings.Index(text, "{")
+			if open < 0 {
+				return
+			}
+			depth, end := 1, open+1
+			for ; end < len(text) && depth > 0; end++ {
+				switch text[end] {
+				case '{':
+					depth++
+				case '}':
+					depth--
+				}
+			}
+			selector := strings.Join(strings.Fields(text[:open]), " ")
+			body := text[open+1 : end-1]
+			text = text[end:]
+			if strings.HasPrefix(selector, "@media") {
+				walk(context+selector+" > ", body)
+				continue
+			}
+			key := context + selector
+			if rules[key] == nil {
+				rules[key] = map[string]bool{}
+			}
+			for _, declaration := range strings.Split(body, ";") {
+				if declaration = strings.Join(strings.Fields(declaration), " "); declaration != "" {
+					rules[key][declaration] = true
+				}
+			}
+		}
+	}
+	walk("", css)
+	return rules
+}
+
+// The parser behind the comparison must tell a moved declaration from an
+// unchanged one, or the parity test above proves nothing.
+func TestParseCSSDeclarationsKeepsRulesAndMediaContextsApart(t *testing.T) {
+	rules := parseCSSDeclarations(":root { --canvas: #fff; }\nbody { color: red; }\n@media (max-width: 1px) { body { color: blue; } }")
+	if !rules[":root"]["--canvas: #fff"] || rules["body"]["--canvas: #fff"] {
+		t.Fatalf("declaration attributed to the wrong rule: %v", rules)
+	}
+	if !rules["body"]["color: red"] || !rules["@media (max-width: 1px) > body"]["color: blue"] || rules["body"]["color: blue"] {
+		t.Fatalf("media context not kept apart: %v", rules)
 	}
 }
 
