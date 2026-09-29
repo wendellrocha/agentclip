@@ -195,7 +195,8 @@ agentclip companion start m2
 
 If only the **remote server** goes down or restarts while the local Companion
 keeps running, it tries to re-establish the SSH tunnel automatically, backing
-off progressively from 1 to 30 seconds. When the connection returns, the same
+off progressively from 1 to 30 seconds (starting over at 1 second after a
+tunnel that stayed up for at least a minute). When the connection returns, the same
 profile and the same remote port are used again. If you want the Companion to
 start with the system, use your operating system's service manager to run
 `agentclip companion start <profile>` explicitly after login; AgentClip does not
