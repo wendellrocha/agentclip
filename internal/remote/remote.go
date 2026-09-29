@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wendellrocha/agentclip/internal/companion"
 	"github.com/wendellrocha/agentclip/internal/release"
@@ -47,10 +48,14 @@ func VersionForProfile(profile companion.Profile) *exec.Cmd {
 }
 
 func versionCommand(destination, identityFile string) *exec.Cmd {
+	return versionCommandContext(context.Background(), destination, identityFile)
+}
+
+func versionCommandContext(ctx context.Context, destination, identityFile string) *exec.Cmd {
 	// A login shell may print a banner or a warning first, so the version is
 	// marked and CheckVersion reads only the marked line.
 	script := "export PATH=\"$HOME/.local/bin:$PATH\"; printf '" + versionMarker + "%s\\n' \"$(agentclip version 2>/dev/null)\""
-	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(script))
+	return remoteSSHCommandContext(ctx, destination, identityFile, "sh -lc "+shellQuote(script))
 }
 
 // versionMarker prefixes the line that carries the server's version.
@@ -112,12 +117,18 @@ func remoteLoginCommandWithIdentity(destination, identityFile string, arguments 
 }
 
 func remoteSSHCommand(destination, identityFile, remoteCommand string) *exec.Cmd {
+	return remoteSSHCommandContext(context.Background(), destination, identityFile, remoteCommand)
+}
+
+// remoteSSHCommandContext is remoteSSHCommand bound to ctx, so a server that
+// stalls cannot hold the caller past its deadline.
+func remoteSSHCommandContext(ctx context.Context, destination, identityFile, remoteCommand string) *exec.Cmd {
 	arguments := []string{}
 	if identityFile != "" {
 		arguments = append(arguments, "-i", identityFile, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes")
 	}
 	arguments = append(arguments, destination, remoteCommand)
-	return exec.Command("ssh", arguments...)
+	return exec.CommandContext(ctx, "ssh", arguments...)
 }
 
 // ensureSetupSSHIdentity preserves an already-working SSH key setup. When the
@@ -263,9 +274,9 @@ func shellQuote(value string) string {
 // platformMarker prefixes the line that carries the server's `uname -sm`.
 const platformMarker = "agentclip-platform="
 
-func platformCommand(destination, identityFile string) *exec.Cmd {
+func platformCommand(ctx context.Context, destination, identityFile string) *exec.Cmd {
 	script := "printf '" + platformMarker + "%s\\n' \"$(uname -sm)\""
-	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(script))
+	return remoteSSHCommandContext(ctx, destination, identityFile, "sh -lc "+shellQuote(script))
 }
 
 // PlatformFromOutput reads the release platform out of platformCommand's output.
@@ -302,7 +313,7 @@ func PlatformFromOutput(output string) (goos, goarch string, err error) {
 // uploadCommand receives an executable on stdin and installs it as
 // ~/.local/bin/agentclip, but only if it hashes to digest. A dropped
 // connection then leaves the previous binary in place instead of a truncated one.
-func uploadCommand(destination, identityFile, digest string) *exec.Cmd {
+func uploadCommand(ctx context.Context, destination, identityFile, digest string) *exec.Cmd {
 	script := strings.Join([]string{
 		"set -eu",
 		"umask 077",
@@ -316,16 +327,20 @@ func uploadCommand(destination, identityFile, digest string) *exec.Cmd {
 		"chmod 755 \"$tmp\"",
 		"mv -f \"$tmp\" \"$dir/agentclip\"",
 	}, "; ")
-	return remoteSSHCommand(destination, identityFile, "sh -c "+shellQuote(script))
+	return remoteSSHCommandContext(ctx, destination, identityFile, "sh -c "+shellQuote(script))
 }
 
 // fetchRelease is upgrader.Fetch, replaceable in tests.
 var fetchRelease = upgrader.Fetch
 
+// InstallTimeout bounds the whole installation on one server: the version probe,
+// the platform probe, the download and verification, and the upload.
+const InstallTimeout = 3 * time.Minute
+
 // installedVersion reads the version of the agentclip already on the server, or
 // "" when there is none or its output cannot be read as a version.
-func installedVersion(destination, identityFile string) string {
-	output, err := versionCommand(destination, identityFile).Output()
+func installedVersion(ctx context.Context, destination, identityFile string) string {
+	output, err := versionCommandContext(ctx, destination, identityFile).Output()
 	if err != nil {
 		return ""
 	}
@@ -349,7 +364,11 @@ func installedVersion(destination, identityFile string) string {
 // version, or a newer one, is left alone and reported as unchanged.
 // Notices about checks that did not apply go to stderr.
 func InstallVerified(ctx context.Context, destination, identityFile, tag string, stderr io.Writer) (bool, error) {
-	if installed := installedVersion(destination, identityFile); installed != "" {
+	// One deadline per server, however many round trips it takes: the upgrade's
+	// own timeout is for resolving and downloading, not for slow links.
+	ctx, cancel := context.WithTimeout(ctx, InstallTimeout)
+	defer cancel()
+	if installed := installedVersion(ctx, destination, identityFile); installed != "" {
 		if comparison, err := release.Compare(tag, installed); err == nil && comparison <= 0 {
 			if stderr != nil {
 				if comparison == 0 {
@@ -361,7 +380,7 @@ func InstallVerified(ctx context.Context, destination, identityFile, tag string,
 			return false, nil
 		}
 	}
-	output, err := platformCommand(destination, identityFile).Output()
+	output, err := platformCommand(ctx, destination, identityFile).Output()
 	if err != nil {
 		return false, fmt.Errorf("read the platform of %s: %w", destination, err)
 	}
@@ -389,7 +408,7 @@ func InstallVerified(ctx context.Context, destination, identityFile, tag string,
 	if _, err := binary.Seek(0, io.SeekStart); err != nil {
 		return false, err
 	}
-	upload := uploadCommand(destination, identityFile, hex.EncodeToString(hash.Sum(nil)))
+	upload := uploadCommand(ctx, destination, identityFile, hex.EncodeToString(hash.Sum(nil)))
 	upload.Stdin = binary
 	if combined, err := upload.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("install AgentClip on %s: %w: %s", destination, err, strings.TrimSpace(string(combined)))

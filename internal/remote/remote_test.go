@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/wendellrocha/agentclip/internal/companion"
+	"github.com/wendellrocha/agentclip/internal/testenv"
 	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
 
@@ -73,25 +74,11 @@ func TestPlatformFromOutputMapsServersAndRefusesTheRest(t *testing.T) {
 	}
 }
 
-// fakeSSH puts an `ssh` on PATH that runs the remote command locally, with HOME
-// pointing at a directory that stands in for the server's home. It lets the
-// upload run for real without a network.
+// fakeSSH returns the home directory of a fake server: an `ssh` that runs the
+// remote command locally, with only what the test installs there to find.
 func fakeSSH(t *testing.T) (home string) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake ssh is a POSIX shell script")
-	}
-	bin := t.TempDir()
-	script := "#!/bin/sh\nfor last; do :; done\nexec sh -c \"$last\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	home = t.TempDir()
-	// Only the system directories: an agentclip installed on the machine running
-	// the tests must not be mistaken for the one on the "server".
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
-	t.Setenv("HOME", home)
-	return home
+	return testenv.NewFakeServer(t).Home
 }
 
 func stubFetch(t *testing.T, content string, notice string, captured *upgrader.Options) {
@@ -230,7 +217,7 @@ func TestInstallVerifiedRefusesUnverifiedAndDamagedBinaries(t *testing.T) {
 	}
 
 	// The bytes that arrive do not match the digest that was verified.
-	command := uploadCommand("host", "", strings.Repeat("0", 64))
+	command := uploadCommand(context.Background(), "host", "", strings.Repeat("0", 64))
 	command.Stdin = strings.NewReader("truncated or tampered")
 	output, err := command.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "does not match") {
@@ -246,7 +233,7 @@ func TestInstallVerifiedRefusesUnverifiedAndDamagedBinaries(t *testing.T) {
 
 func TestManagedSSHCommandsUseDedicatedIdentityWithoutPrompts(t *testing.T) {
 	identity := filepath.Join(t.TempDir(), "agentclip-key")
-	install := uploadCommand("bastion-m2", identity, strings.Repeat("0", 64))
+	install := uploadCommand(context.Background(), "bastion-m2", identity, strings.Repeat("0", 64))
 	login := remoteLoginCommandWithIdentity("bastion-m2", identity, "true")
 	for _, command := range []*exec.Cmd{install, login, sshKeyCheckCommand("bastion-m2", identity)} {
 		arguments := strings.Join(command.Args, " ")
@@ -343,5 +330,30 @@ func TestVersionForProfileRunsAgentclipVersionThroughALoginShell(t *testing.T) {
 		if !strings.Contains(arguments, want) {
 			t.Errorf("version command %q lacks %q", arguments, want)
 		}
+	}
+}
+
+// Every SSH round trip of an install obeys the caller's context, so a server
+// that stalls cannot hold an upgrade past its deadline.
+func TestInstallVerifiedStopsWhenItsContextIsDone(t *testing.T) {
+	home := fakeSSH(t)
+	fetched := false
+	stubFetch(t, "binary", "", nil)
+	inner := fetchRelease
+	fetchRelease = func(ctx context.Context, options upgrader.Options) (upgrader.Fetched, error) {
+		fetched = true
+		return inner(ctx, options)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	changed, err := InstallVerified(ctx, "host", "", "v0.7.2", nil)
+	if err == nil || !errors.Is(err, context.Canceled) || changed {
+		t.Fatalf("changed = %v, err = %v; want the cancellation reported", changed, err)
+	}
+	if fetched {
+		t.Error("a release was downloaded although the context was already done")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "agentclip")); err == nil {
+		t.Error("something was installed although the context was already done")
 	}
 }

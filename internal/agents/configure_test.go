@@ -3,59 +3,31 @@ package agents
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/wendellrocha/agentclip/internal/companion"
+	"github.com/wendellrocha/agentclip/internal/testenv"
 )
 
-// server stands in for the remote machine. A fake `ssh` runs the remote command
-// locally with HOME pointing at a directory of its own, whose ~/.local/bin holds
-// the fake agentclip and harness CLIs. Each harness logs its arguments, so the
-// tests can see exactly what setup registered without a network or a real CLI.
+// server is the fake remote machine: harnesses log their arguments, so the tests
+// can see exactly what setup registered without a network or a real CLI.
 type server struct {
-	t    *testing.T
-	home string
-	log  string
+	*testenv.FakeServer
+	log string
 }
 
 func newServer(t *testing.T) *server {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake server is built from POSIX shell scripts")
-	}
-	bin := t.TempDir()
-	sshScript := "#!/bin/sh\nfor last; do :; done\nexec sh -c \"$last\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(sshScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	s := &server{t: t, home: t.TempDir()}
-	s.log = filepath.Join(t.TempDir(), "calls.log")
-	t.Setenv("HOME", s.home)
-	// Only the system directories, so an agentclip on the developer's machine is
-	// never mistaken for the one on the "server".
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
-	return s
-}
-
-func (s *server) install(name, script string) {
-	s.t.Helper()
-	dir := filepath.Join(s.home, ".local", "bin")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
-		s.t.Fatal(err)
-	}
+	return &server{FakeServer: testenv.NewFakeServer(t), log: filepath.Join(t.TempDir(), "calls.log")}
 }
 
 // agentclip installs a fake agentclip that reports version.
-func (s *server) agentclip(version string) { s.install("agentclip", "echo '"+version+"'") }
+func (s *server) agentclip(version string) { s.Install("agentclip", "echo '"+version+"'") }
 
 // harness installs a fake harness CLI that appends its arguments to the call log.
 func (s *server) harness(name string) {
-	s.install(name, "echo \""+name+" $*\" >> '"+s.log+"'")
+	s.Install(name, "echo \""+name+" $*\" >> '"+s.log+"'")
 }
 
 func (s *server) calls() []string {
@@ -167,7 +139,7 @@ func TestConfigureRefusesBadInput(t *testing.T) {
 func TestConfigureReportsAFailedRegistration(t *testing.T) {
 	s := newServer(t)
 	s.agentclip("v0.7.3")
-	s.install("codex", `case "$2" in add) exit 3;; esac`)
+	s.Install("codex", `case "$2" in add) exit 3;; esac`)
 	if _, err := Configure(profileFor(), "codex"); err == nil || !strings.Contains(err.Error(), "configure Codex MCP on bastion-m2") {
 		t.Fatalf("err = %v, want the failed registration named", err)
 	}
