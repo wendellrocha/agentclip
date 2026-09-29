@@ -22,7 +22,8 @@ irm https://raw.githubusercontent.com/wendellrocha/agentclip/main/scripts/instal
 ```
 
 Os scripts detectam a plataforma, consultam a release mais recente, verificam
-o SHA-256 e inspecionam a versão já instalada. Eles baixam e atualizam somente
+o SHA-256 e a autenticidade do build (veja abaixo) e inspecionam a versão já
+instalada. Eles baixam e atualizam somente
 quando a versão encontrada é mais nova; repetir o instalador é seguro. Para uma
 versão específica, use `--version vX.Y.Z` no instalador POSIX ou
 `-Version vX.Y.Z` no PowerShell. Os artefatos e checksums também estão nas
@@ -59,8 +60,34 @@ gh attestation verify "agentclip_${VERSION}_linux_amd64.tar.gz" \
 A identidade exige o ref exato da tag do release, então uma execução do workflow
 a partir de outra branch não é aceita.
 
-Os instaladores e o `agentclip upgrade` verificam apenas o SHA-256; a
-verificação da assinatura é um passo manual.
+O `gh attestation verify` sem `--bundle` consulta o GitHub e exige `gh auth login`.
+Para verificar sem login, baixe também o `attestation.jsonl` da release e acrescente
+`--bundle attestation.jsonl`.
+
+### Verificação automática
+
+A partir da `v0.7.1-rc.1`, os instaladores e o `agentclip upgrade` confirmam,
+além do SHA-256, que o arquivo baixado foi produzido pelo workflow de release
+deste repositório na tag que está sendo instalada. Se a confirmação falhar, a
+instalação é recusada.
+
+- **`install.sh` e `install.ps1`:** usam `gh attestation verify` com o
+  `attestation.jsonl` da release, que dispensa `gh auth login`, quando o `gh`
+  está instalado. Se o `gh` **rejeitar** o arquivo, a instalação falha, sem
+  tentar um método mais fraco. Sem `gh`, ou se a release não tiver o bundle,
+  consultam a API de atestados do GitHub.
+- **`agentclip upgrade`:** consulta a API de atestados do GitHub.
+
+A consulta à API confirma que o repositório tem um atestado para exatamente o
+SHA-256 do arquivo, feito pelo `release.yml` na tag da versão, o que impede a
+troca de arquivos de uma release. Ela confia no TLS e na API do GitHub e **não
+verifica a assinatura** em si. Para a verificação criptográfica completa, instale
+o `gh` ou use os comandos manuais acima.
+
+Se a API estiver fora do ar ou com o limite de requisições estourado, a
+instalação é recusada em vez de seguir sem verificar. Para instalar mesmo assim,
+apenas com o SHA-256, defina `AGENTCLIP_SKIP_ATTESTATION=1`. Versões anteriores
+à `v0.7.1-rc.1` não têm atestado e são instaladas só com o SHA-256, com um aviso.
 
 ## Início rápido
 
@@ -132,7 +159,8 @@ Para atualizar o executável local e todos os perfis remotos salvos, use:
 agentclip upgrade
 ```
 
-O comando valida o SHA-256 publicado, mantém parados os perfis que já estavam
+O comando valida o SHA-256 publicado e o atestado de build da release, mantém
+parados os perfis que já estavam
 parados e reinicia somente os Companions que estavam ativos.
 
 `agentclip companion open m2` abre uma página web local, protegida por token,

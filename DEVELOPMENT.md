@@ -106,7 +106,12 @@ que ainda estiver rodando tentará abrir novamente o mesmo túnel reverso.
 Uma tag semântica `vX.Y.Z` dispara os workflows de teste e release. A release
 publica binários para Linux `amd64`/`arm64`, macOS `amd64`/`arm64` e Windows
 `amd64`, além de checksums (assinados com cosign, `checksums.txt.bundle`),
-atestado de proveniência e instaladores.
+o atestado de proveniência (`attestation.jsonl`) e instaladores.
+
+Os testes offline dos instaladores ficam em `scripts/test-install.sh` e
+`scripts/test-install.ps1`, com uma resposta real da API do GitHub em
+`scripts/testdata/`. Rode-os com `sh scripts/test-install.sh` e
+`pwsh scripts/test-install.ps1`.
 
 ```bash
 git tag -a vX.Y.Z -m "Release vX.Y.Z"

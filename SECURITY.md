@@ -23,7 +23,9 @@ Apenas a release mais recente recebe correções de segurança. Atualize com
 ## Verificação de releases
 
 Os releases têm `checksums.txt` assinado com cosign e atestado de proveniência.
-Veja "Verificar a autenticidade de um release" no [README](README.md).
+Os instaladores e o `agentclip upgrade` confirmam automaticamente o atestado a
+partir da `v0.7.1-rc.1`. Veja "Verificar a autenticidade de um release" no
+[README](README.md), que também descreve os limites dessa verificação.
 
 ## Escopo
 
