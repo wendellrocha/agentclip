@@ -159,3 +159,18 @@ func TestSnapshotRefusesFilePathsThatAreNotOneAbsoluteRegularFile(t *testing.T) 
 		})
 	}
 }
+
+// The host path is what the design keeps from the remote side, so a refusal
+// must not repeat it back in the response.
+func TestControlErrorsNeverEchoTheHostPath(t *testing.T) {
+	d := startForHandlers(t)
+	missing := filepath.Join(t.TempDir(), "secret-host-directory", "report.csv")
+	body := fmt.Sprintf(`{"items":[{"kind":"file","path":%q}]}`, missing)
+	status, reply := controlRequest(t, d, http.MethodPost, "/v1/control/snapshot", []byte(body))
+	if status != http.StatusBadRequest {
+		t.Fatalf("snapshot = %d %q, want 400", status, reply)
+	}
+	if strings.Contains(reply, "secret-host-directory") || strings.Contains(reply, filepath.Dir(missing)) {
+		t.Fatalf("the response repeats the host path: %q", reply)
+	}
+}
