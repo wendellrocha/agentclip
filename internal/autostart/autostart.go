@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -23,6 +24,10 @@ type Spec struct {
 	UID int
 	// LogPath receives what the process writes before its own log exists.
 	LogPath string
+	// Environment is passed to the service. A login service does not inherit the
+	// shell that enabled it, so anything the profile lookup depends on, such as
+	// AGENTCLIP_CONFIG_DIR, has to be written into the definition.
+	Environment map[string]string
 }
 
 // Command is one process to run.
@@ -41,6 +46,9 @@ type File struct {
 
 // Plan is everything one platform needs to turn autostart on and off.
 type Plan struct {
+	// Dirs are created before anything is loaded: the service manager opens the
+	// log files before it starts the process and does not create their directory.
+	Dirs  []string
 	Files []File
 	// Enable runs after the files are written.
 	Enable []Command
@@ -49,8 +57,8 @@ type Plan struct {
 	Disable []Command
 	// AfterRemove runs once the files are gone.
 	AfterRemove []Command
-	// Query succeeds when autostart is on. When empty, the plan is on if its
-	// first file exists.
+	// Query asks the system whether autostart is on. When nil, the plan is on if
+	// its first file exists, which is what makes a LaunchAgent load at login.
 	Query *Command
 }
 
@@ -76,6 +84,9 @@ func PlanFor(goos string, spec Spec) (Plan, error) {
 	case "linux":
 		return linuxPlan(spec), nil
 	case "windows":
+		if len(spec.Environment) > 0 {
+			return Plan{}, errors.New("a Windows logon task cannot carry environment variables such as AGENTCLIP_CONFIG_DIR; unset them, or set them for your user account, and turn autostart on again")
+		}
 		return windowsPlan(spec), nil
 	default:
 		return Plan{}, fmt.Errorf("autostart is not supported on %s", goos)
@@ -97,6 +108,14 @@ func darwinPlan(spec Spec) Plan {
 		program.WriteString("\t\t<string>" + xmlEscape(argument) + "</string>\n")
 	}
 	logPath := xmlEscape(spec.LogPath)
+	environment := ""
+	if len(spec.Environment) > 0 {
+		var entries strings.Builder
+		for _, key := range sortedKeys(spec.Environment) {
+			entries.WriteString("\t\t<key>" + xmlEscape(key) + "</key>\n\t\t<string>" + xmlEscape(spec.Environment[key]) + "</string>\n")
+		}
+		environment = "\t<key>EnvironmentVariables</key>\n\t<dict>\n" + entries.String() + "\t</dict>\n"
+	}
 	content := `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -106,7 +125,7 @@ func darwinPlan(spec Spec) Plan {
 	<key>ProgramArguments</key>
 	<array>
 ` + program.String() + `	</array>
-	<key>RunAtLoad</key>
+` + environment + `	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
 	<dict>
@@ -123,6 +142,7 @@ func darwinPlan(spec Spec) Plan {
 </plist>
 `
 	return Plan{
+		Dirs:    []string{path.Dir(spec.LogPath)},
 		Files:   []File{{Path: file, Content: content}},
 		Enable:  []Command{{"launchctl", []string{"bootstrap", domain, file}}},
 		Disable: []Command{{"launchctl", []string{"bootout", domain + "/" + label}}},
@@ -142,7 +162,7 @@ After=network-online.target
 
 [Service]
 ExecStart=` + strings.Join(words, " ") + `
-Restart=on-failure
+` + systemdEnvironment(spec.Environment) + `Restart=on-failure
 RestartSec=5
 
 [Install]
@@ -153,6 +173,9 @@ WantedBy=default.target
 		Enable:      []Command{{"systemctl", []string{"--user", "daemon-reload"}}, {"systemctl", []string{"--user", "enable", "--now", unit}}},
 		Disable:     []Command{{"systemctl", []string{"--user", "disable", "--now", unit}}},
 		AfterRemove: []Command{{"systemctl", []string{"--user", "daemon-reload"}}},
+		// Enabled means the login will start it, which is not the same as the
+		// unit file being there: `systemctl disable` leaves the file.
+		Query: &Command{"systemctl", []string{"--user", "is-enabled", "--quiet", unit}},
 	}
 }
 
@@ -164,6 +187,24 @@ func windowsPlan(spec Spec) Plan {
 		Disable: []Command{{"schtasks", []string{"/Delete", "/F", "/TN", task}}},
 		Query:   &Command{"schtasks", []string{"/Query", "/TN", task}},
 	}
+}
+
+func sortedKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// systemdEnvironment renders Environment= lines, one quoted assignment each.
+func systemdEnvironment(values map[string]string) string {
+	var lines strings.Builder
+	for _, key := range sortedKeys(values) {
+		lines.WriteString("Environment=" + systemdQuote(key+"="+values[key]) + "\n")
+	}
+	return lines.String()
 }
 
 func xmlEscape(value string) string {
@@ -185,6 +226,8 @@ func systemdQuote(word string) string {
 // happen; the commands wire them to the real system.
 type Runner struct {
 	GOOS string
+	// MkdirAll creates a directory and its parents, privately.
+	MkdirAll func(path string) error
 	// WriteFile writes the file, creating its directory.
 	WriteFile func(path string, content []byte) error
 	// Remove deletes the file; a file that is already gone is not an error.
@@ -200,6 +243,11 @@ func (r Runner) Enable(spec Spec) error {
 	plan, err := PlanFor(r.GOOS, spec)
 	if err != nil {
 		return err
+	}
+	for _, dir := range plan.Dirs {
+		if err := r.MkdirAll(dir); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
 	}
 	for _, file := range plan.Files {
 		if err := r.WriteFile(file.Path, []byte(file.Content)); err != nil {
@@ -221,14 +269,19 @@ func (r Runner) Enable(spec Spec) error {
 }
 
 // Disable turns autostart off and removes what Enable wrote. Turning off what is
-// not on succeeds, so it can be run to make sure.
+// not on succeeds, so it can be run to make sure. What the system refuses to
+// stop is not hidden: when it still reports autostart as on afterwards, the
+// error of the command that should have turned it off is returned.
 func (r Runner) Disable(spec Spec) error {
 	plan, err := PlanFor(r.GOOS, spec)
 	if err != nil {
 		return err
 	}
+	var lastFailure error
 	for _, command := range plan.Disable {
-		_ = r.Run(command)
+		if err := r.Run(command); err != nil {
+			lastFailure = fmt.Errorf("%s: %w", command, err)
+		}
 	}
 	for _, file := range plan.Files {
 		if err := r.Remove(file.Path); err != nil {
@@ -237,6 +290,12 @@ func (r Runner) Disable(spec Spec) error {
 	}
 	for _, command := range plan.AfterRemove {
 		_ = r.Run(command)
+	}
+	if plan.Query != nil && r.Run(*plan.Query) == nil {
+		if lastFailure == nil {
+			lastFailure = errors.New("the system still reports it as on")
+		}
+		return fmt.Errorf("autostart is still on: %w", lastFailure)
 	}
 	return nil
 }

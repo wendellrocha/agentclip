@@ -42,7 +42,7 @@ func runAutostart(arguments []string, stdout io.Writer) error {
 		if err := runner.Disable(spec); err != nil {
 			return fmt.Errorf("turn off autostart for %q: %w", name, err)
 		}
-		fmt.Fprintf(stdout, "Companion %q will no longer start when you log in. A running Companion keeps running.\n", name)
+		fmt.Fprintf(stdout, "Companion %q will no longer start when you log in. A Companion the service started is stopped; one you started yourself keeps running.\n", name)
 	case "status":
 		on, err := runner.Enabled(spec)
 		if err != nil {
@@ -73,12 +73,19 @@ func autostartSpec(name string) (autostart.Spec, error) {
 	if err != nil {
 		return autostart.Spec{}, fmt.Errorf("locate the home directory: %w", err)
 	}
-	return autostart.Spec{Profile: name, Executable: executable, HomeDir: home, UID: os.Getuid(), LogPath: companionLogPath(name) + ".autostart"}, nil
+	spec := autostart.Spec{Profile: name, Executable: executable, HomeDir: home, UID: os.Getuid(), LogPath: companionLogPath(name) + ".autostart"}
+	// The profile lives where AGENTCLIP_CONFIG_DIR says; a login service does not
+	// inherit this shell, so it has to be written into the service.
+	if directory := strings.TrimSpace(os.Getenv("AGENTCLIP_CONFIG_DIR")); directory != "" {
+		spec.Environment = map[string]string{"AGENTCLIP_CONFIG_DIR": directory}
+	}
+	return spec, nil
 }
 
 func systemAutostartRunner() autostart.Runner {
 	return autostart.Runner{
-		GOOS: runtime.GOOS,
+		GOOS:     runtime.GOOS,
+		MkdirAll: func(path string) error { return os.MkdirAll(path, 0o700) },
 		WriteFile: func(path string, content []byte) error {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return err

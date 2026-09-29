@@ -703,7 +703,19 @@ func runCompanionService(name string, announce bool) error {
 		return err
 	}
 	// A login service must not start a second Companion for a profile that is
-	// already running: they would fight over the state file and the tunnel.
+	// already running: they would fight over the state file and the tunnel. The
+	// check and the claim (the runtime state written by StartControl) happen under
+	// a start lock, so two starts at the same moment cannot both pass the check.
+	releaseStart, err := acquireProfileStartLock(name, profileStartWait, profileStartStale)
+	if err != nil {
+		return err
+	}
+	startReleased := false
+	defer func() {
+		if !startReleased {
+			releaseStart()
+		}
+	}()
 	if state, err := companion.LoadRuntime(name); err == nil && companion.RuntimeHealthy(state) {
 		if announce {
 			return fmt.Errorf("Companion %q is already running; use `agentclip companion open %s`", name, name)
@@ -776,6 +788,9 @@ func runCompanionService(name string, announce bool) error {
 		logger.Error("start Companion control server: %v", err)
 		return fmt.Errorf("start Companion control server: %w", err)
 	}
+	// The runtime state is written: a later start sees this Companion as running.
+	startReleased = true
+	releaseStart()
 	defer controlServer.Close()
 	go watchReleaseStatus(ctx, state, logger, func(next release.Status) {
 		releaseMu.Lock()
@@ -979,4 +994,48 @@ func randomPort() (int, error) {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: agentclip <command>")
 	fmt.Fprintln(os.Stderr, "commands: arm, ssh, pair, setup, connect, uninstall, companion, logs, mcp, harness, doctor, version")
+}
+
+// How long a start waits for another start of the same profile, and how old a
+// start lock must be before it is taken for a leftover of a crashed start.
+const (
+	profileStartWait  = 25 * time.Second
+	profileStartStale = 20 * time.Second
+)
+
+// acquireProfileStartLock serialises the starts of one profile. It is held only
+// while a Companion decides whether to start and writes its runtime state, so a
+// waiting start gets the lock as soon as the first one has either claimed the
+// profile or given up.
+func acquireProfileStartLock(name string, wait, stale time.Duration) (func(), error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return nil, fmt.Errorf("find AgentClip cache directory: %w", err)
+	}
+	directory := filepath.Join(cacheDir, "agentclip", "companions")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return nil, fmt.Errorf("create AgentClip cache directory: %w", err)
+	}
+	path := filepath.Join(directory, name+".start.lock")
+	deadline := time.Now().Add(wait)
+	for {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil {
+			return func() {
+				_ = file.Close()
+				_ = os.Remove(path)
+			}, nil
+		}
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("lock the start of Companion %q: %w", name, err)
+		}
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > stale {
+			_ = os.Remove(path)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("another start of Companion %q is in progress", name)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }

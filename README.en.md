@@ -201,9 +201,9 @@ agentclip companion autostart status m2
 agentclip companion autostart disable m2
 ```
 
-Turning it off removes the service but does not stop a Companion that is already
-running. If the Companion is already running when the login starts the service,
-the service does not open a second one.
+Turning it off removes the service and stops the Companion it started; one you
+started yourself keeps running. If the Companion is already running when the
+login starts the service, the service does not open a second one.
 
 If only the **remote server** goes down or restarts while the local Companion
 keeps running, it tries to re-establish the SSH tunnel automatically, backing
