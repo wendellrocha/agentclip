@@ -43,11 +43,11 @@ func (NativeReader) ReadImage(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("initialize clipboard: %w", err)
 	}
 	b, err := native.Read(ctx, native.FmtImage)
+	if errors.Is(err, native.ErrNoData) || (err == nil && len(b) == 0) {
+		return nil, ErrNoImage
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read clipboard image: %w", err)
-	}
-	if len(b) == 0 {
-		return nil, ErrNoImage
 	}
 	return b, nil
 }

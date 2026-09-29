@@ -19,8 +19,14 @@ func nativeSetText(t *testing.T, text string) {
 
 func nativeSetImage(t *testing.T, pngPath string) {
 	t.Helper()
-	script := `set the clipboard to (read (POSIX file "` + pngPath + `") as «class PNGf»)`
-	if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
+	// The path is an argument, not part of the script, so any character in a
+	// temporary directory name is safe.
+	command := exec.Command("osascript",
+		"-e", "on run argv",
+		"-e", "set the clipboard to (read (POSIX file (item 1 of argv)) as «class PNGf»)",
+		"-e", "end run",
+		pngPath)
+	if out, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("set image: %v: %s", err, out)
 	}
 }

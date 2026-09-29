@@ -72,8 +72,9 @@ func TestNativeTextRoundTripKeepsMultibyteUTF8(t *testing.T) {
 func TestNativeTextOnlyClipboardHasNoImageAndNoFiles(t *testing.T) {
 	requireNativeClipboard(t)
 	nativeSetTextExclusive(t, "just text")
-	if img, err := (NativeReader{}).ReadImage(nativeContext(t)); err == nil {
-		t.Fatalf("ReadImage returned %d bytes for a text-only clipboard", len(img))
+	img, err := (NativeReader{}).ReadImage(nativeContext(t))
+	if !errors.Is(err, ErrNoImage) || len(img) != 0 {
+		t.Fatalf("ReadImage = %d bytes, %v; want ErrNoImage and no bytes", len(img), err)
 	}
 	if _, err := FilePaths(nativeContext(t)); !errors.Is(err, ErrNoFiles) {
 		t.Fatalf("FilePaths err = %v, want ErrNoFiles", err)
