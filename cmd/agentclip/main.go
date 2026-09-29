@@ -704,7 +704,7 @@ func runCompanionService(name string, announce bool) error {
 	}
 	// A login service must not start a second Companion for a profile that is
 	// already running: they would fight over the state file and the tunnel.
-	if state, err := companion.LoadRuntime(name); err == nil && companion.RuntimeHealthy(state) && state.PID != os.Getpid() {
+	if state, err := companion.LoadRuntime(name); err == nil && companion.RuntimeHealthy(state) {
 		if announce {
 			return fmt.Errorf("Companion %q is already running; use `agentclip companion open %s`", name, name)
 		}
