@@ -359,7 +359,14 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 // that is malformed or larger than the limit is answered with 400 and reported
 // as false, so the handler never acts on a partial request.
 func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, value any) bool {
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(value); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	if err := decoder.Decode(value); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return false
+	}
+	// One Decode stops after the first value; reading on makes the limit apply
+	// to the whole body and rejects trailing data.
+	if _, err := decoder.Token(); err != io.EOF {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return false
 	}
