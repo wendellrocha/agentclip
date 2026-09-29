@@ -292,6 +292,11 @@ func validateFileRef(ref FileRef) (FileRef, error) {
 	if ref.Path == "" || ref.Size < 0 || ref.Size > MaxFileBytes || ref.SHA256 == "" {
 		return FileRef{}, ErrInvalidFile
 	}
+	// A file reference names one absolute, normalized path: never something
+	// relative to the bridge's working directory, or with ".." segments.
+	if !filepath.IsAbs(ref.Path) || filepath.Clean(ref.Path) != ref.Path {
+		return FileRef{}, ErrInvalidFile
+	}
 	info, err := os.Lstat(ref.Path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() != ref.Size || !info.ModTime().Equal(ref.ModTime) {
 		return FileRef{}, ErrInvalidFile
