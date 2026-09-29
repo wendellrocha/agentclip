@@ -55,7 +55,8 @@ cosign verify-blob \
 # Linux
 sha256sum --check --ignore-missing checksums.txt
 # macOS (it has neither sha256sum nor --ignore-missing)
-grep " agentclip_${VERSION}_darwin_arm64.tar.gz$" checksums.txt | shasum -a 256 --check
+ARCH=$(uname -m | sed s/x86_64/amd64/) # arm64 or amd64
+grep " agentclip_${VERSION}_darwin_${ARCH}.tar.gz$" checksums.txt | shasum -a 256 --check
 
 gh attestation verify "agentclip_${VERSION}_linux_amd64.tar.gz" \
   --repo wendellrocha/agentclip \
@@ -244,8 +245,9 @@ installed; `--agent` lets you choose one of them.
 - Files sent from the server to the host require local approval, accept one
   regular file of up to 50 MiB at a time, have their SHA-256 verified and are
   written atomically to `~/.cache/agentclip/received/` (or the platform's
-  equivalent cache). Offers expire after 10 minutes and received files are
-  cleaned up after 30.
+  equivalent cache). Offers expire after 10 minutes and the Companion forgets them
+  30 minutes after that; delivered files stay in that folder until you delete
+  them.
 - The remote server must be trusted: it receives the content only after an
   explicit call to an MCP tool.
 
