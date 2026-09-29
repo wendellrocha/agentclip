@@ -80,6 +80,11 @@ instalação é recusada.
   tentar um método mais fraco. Sem `gh`, ou se a release não tiver o bundle,
   consultam a API de atestados do GitHub.
 - **`agentclip upgrade`:** consulta a API de atestados do GitHub.
+- **Servidores (`agentclip setup` e `agentclip upgrade`):** esta máquina baixa o
+  binário da plataforma do servidor, faz a mesma verificação do `upgrade` e o
+  envia pela conexão SSH. Nenhum script é baixado ou executado no servidor, que
+  só confere se o SHA-256 do que recebeu é o do binário verificado; um envio
+  truncado nunca substitui o binário que já funciona.
 
 A consulta à API confirma que o repositório tem um atestado para exatamente o
 SHA-256 do arquivo, feito pelo `release.yml` na tag da versão, o que impede a
@@ -89,8 +94,9 @@ o `gh` ou use os comandos manuais acima.
 
 Se a API estiver fora do ar ou com o limite de requisições estourado, a
 instalação é recusada em vez de seguir sem verificar. Para instalar mesmo assim,
-apenas com o SHA-256, defina `AGENTCLIP_SKIP_ATTESTATION=1`. No `agentclip upgrade`
-a variável também é repassada aos instaladores dos servidores. Versões anteriores
+apenas com o SHA-256, defina `AGENTCLIP_SKIP_ATTESTATION=1`. No `agentclip setup` e no
+`agentclip upgrade` a variável vale também para os binários enviados aos
+servidores. Versões anteriores
 à `v0.7.1-rc.1` não têm atestado e são instaladas só com o SHA-256, com um aviso.
 
 ## Início rápido
