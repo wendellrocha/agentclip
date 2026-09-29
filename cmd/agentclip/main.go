@@ -37,6 +37,7 @@ import (
 	"github.com/wendellrocha/agentclip/internal/mcpserver"
 	"github.com/wendellrocha/agentclip/internal/release"
 	"github.com/wendellrocha/agentclip/internal/remote"
+	"github.com/wendellrocha/agentclip/internal/selfupgrade"
 	"github.com/wendellrocha/agentclip/internal/sshsession"
 	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
@@ -561,11 +562,6 @@ func runLogs(arguments []string) error {
 	return nil
 }
 
-type remoteUpgradeResult struct {
-	Profile string
-	Err     error
-}
-
 // runUpgrade updates every configured server, then atomically replaces the
 // executable that launched this command. A remote failure is reported after
 // every profile has been attempted and does not discard a verified local
@@ -577,72 +573,25 @@ func runUpgrade(arguments []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	checker := release.NewChecker()
-	tag, err := checker.FetchLatest(ctx)
-	if err != nil {
-		return fmt.Errorf("resolve latest AgentClip release: %w", err)
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate running AgentClip executable: %w", err)
-	}
-	staged, err := upgrader.Prepare(ctx, upgrader.Options{Version: tag, Executable: executable, SkipAttestation: os.Getenv(upgrader.SkipAttestationEnv) == "1"})
-	if err != nil {
-		return fmt.Errorf("prepare AgentClip %s: %w", tag, err)
-	}
-	if staged.Notice != "" {
-		fmt.Fprintln(os.Stderr, "warning:", staged.Notice)
-	}
-	profiles, err := companion.ListProfiles()
-	if err != nil {
-		staged.Cleanup()
-		return err
-	}
-	// Capture this before remote work starts: only Companions that were healthy
-	// when the upgrade began are eligible for a later restart.
-	active, err := activeCompanions(profiles)
-	if err != nil {
-		staged.Cleanup()
-		return err
-	}
-	results := make([]remoteUpgradeResult, 0, len(profiles))
-	for _, profile := range profiles {
-		fmt.Printf("Updating %q on %s...\n", profile.Name, profile.Destination)
-		err := remote.InstallCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, tag).Run()
-		results = append(results, remoteUpgradeResult{Profile: profile.Name, Err: err})
-	}
-	if err := stopCompanions(active); err != nil {
-		staged.Cleanup()
-		_ = restartCompanions(active)
-		return err
-	}
-	if runtime.GOOS == "windows" {
-		if err := launchWindowsReplacement(staged, active); err != nil {
-			staged.Cleanup()
-			_ = restartCompanions(active)
-			return err
-		}
-		printRemoteUpgradeSummary(results)
-		if hasRemoteUpgradeFailure(results) {
-			return errors.New("one or more remote hosts could not be updated; the local update will finish shortly")
-		}
-		fmt.Printf("AgentClip %s will replace itself and restart %d Companion(s) shortly.\n", tag, len(active))
-		return nil
-	}
-	if err := os.Rename(staged.Path, staged.Target); err != nil {
-		staged.Cleanup()
-		_ = restartCompanions(active)
-		return fmt.Errorf("replace AgentClip executable: %w", err)
-	}
-	if err := restartCompanions(active); err != nil {
-		printRemoteUpgradeSummary(results)
-		return err
-	}
-	printRemoteUpgradeSummary(results)
-	if hasRemoteUpgradeFailure(results) {
-		return errors.New("one or more remote hosts could not be updated")
-	}
-	fmt.Printf("AgentClip updated to %s.\n", tag)
-	return nil
+	return selfupgrade.Runner{
+		GOOS:       runtime.GOOS,
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		LatestTag:  checker.FetchLatest,
+		Executable: os.Executable,
+		Prepare: func(ctx context.Context, tag, executable string) (upgrader.StagedBinary, error) {
+			return upgrader.Prepare(ctx, upgrader.Options{Version: tag, Executable: executable, SkipAttestation: os.Getenv(upgrader.SkipAttestationEnv) == "1"})
+		},
+		Profiles:         companion.ListProfiles,
+		ActiveCompanions: activeCompanions,
+		InstallRemote: func(profile companion.Profile, tag string) error {
+			return remote.InstallCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, tag).Run()
+		},
+		StopCompanions:           stopCompanions,
+		RestartCompanions:        restartCompanions,
+		Replace:                  os.Rename,
+		LaunchWindowsReplacement: launchWindowsReplacement,
+	}.Run(ctx)
 }
 
 func activeCompanions(profiles []companion.Profile) ([]string, error) {
@@ -695,30 +644,6 @@ func restartCompanions(names []string) error {
 		return fmt.Errorf("restart Companion(s): %s", strings.Join(failures, "; "))
 	}
 	return nil
-}
-
-func printRemoteUpgradeSummary(results []remoteUpgradeResult) {
-	if len(results) == 0 {
-		fmt.Println("No remote profiles configured.")
-		return
-	}
-	fmt.Println("Remote update summary:")
-	for _, result := range results {
-		if result.Err == nil {
-			fmt.Printf("  %s: updated\n", result.Profile)
-		} else {
-			fmt.Printf("  %s: failed (%v)\n", result.Profile, result.Err)
-		}
-	}
-}
-
-func hasRemoteUpgradeFailure(results []remoteUpgradeResult) bool {
-	for _, result := range results {
-		if result.Err != nil {
-			return true
-		}
-	}
-	return false
 }
 
 // launchWindowsReplacement delegates the locked .exe replacement to a fresh
