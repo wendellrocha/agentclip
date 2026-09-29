@@ -457,6 +457,9 @@ func runLogs(arguments []string) error {
 	if settings.NArg() != 0 {
 		return errors.New("usage: agentclip logs <profile> [--export caminho]")
 	}
+	if err := companion.RequireLog(arguments[0]); err != nil {
+		return err
+	}
 	logger, err := companion.NewLogger(arguments[0])
 	if err != nil {
 		return err
