@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+// tunnelTiming shapes the reconnection: the wait starts at min, doubles after each
+// exit up to max, and starts over once a tunnel has stayed up for stable. It is a
+// variable only so tests do not have to wait.
+var tunnelTiming = struct{ min, max, stable time.Duration }{time.Second, 30 * time.Second, time.Minute}
+
 type TunnelStatus struct {
 	Connected bool      `json:"connected"`
 	LastError string    `json:"last_error,omitempty"`
@@ -66,7 +71,7 @@ func runTunnelWithLogger(ctx context.Context, profile Profile, localPort int, ob
 		}
 		observe(status)
 	}
-	delay := time.Second
+	delay := tunnelTiming.min
 	for {
 		command, err := TunnelCommand(profile, localPort)
 		if err != nil {
@@ -81,6 +86,7 @@ func runTunnelWithLogger(ctx context.Context, profile Profile, localPort int, ob
 			return err
 		}
 		logger.Debug("SSH tunnel started")
+		startedAt := time.Now()
 		notify(true, nil)
 		result := make(chan error, 1)
 		go func() { result <- command.Wait() }()
@@ -96,15 +102,18 @@ func runTunnelWithLogger(ctx context.Context, profile Profile, localPort int, ob
 			}
 			notify(false, err)
 		}
+		// A tunnel that stayed up earns a fresh start: only repeated quick exits
+		// should push the wait toward its maximum.
+		if time.Since(startedAt) >= tunnelTiming.stable {
+			delay = tunnelTiming.min
+		}
 		logger.Info("SSH tunnel reconnecting in %s", delay)
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(delay):
 		}
-		if delay < 30*time.Second {
-			delay *= 2
-		}
+		delay = min(delay*2, tunnelTiming.max)
 	}
 }
 
