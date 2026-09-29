@@ -144,9 +144,16 @@ func TestCLICommandsOnAnUnknownProfileFailWithoutSideEffects(t *testing.T) {
 			}
 		})
 	}
+	// Asking for the logs of a profile that never ran says so, and creates nothing.
+	if result := runCLI(t, "logs", "nope"); result.exitCode != 1 || !strings.Contains(result.stderr, "no log for this profile") {
+		t.Fatalf("logs of an unknown profile = exit %d, stderr %q", result.exitCode, result.stderr)
+	}
 	if cache, err := os.UserCacheDir(); err == nil {
 		if _, err := os.Stat(filepath.Join(cache, "agentclip", "bridge.json")); err == nil {
 			t.Error("a failed command left a bridge state file behind")
+		}
+		if _, err := os.Stat(filepath.Join(cache, "agentclip", "logs", "nope.log")); err == nil {
+			t.Error("asking for the logs of an unknown profile created a log file")
 		}
 	}
 }

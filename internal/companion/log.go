@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,25 @@ type Logger struct {
 
 // maxLogBytes bounds the live log; one previous generation is kept as .1.
 const maxLogBytes = 5 << 20
+
+// ErrNoLog means the profile has never written a log on this machine.
+var ErrNoLog = errors.New("no log for this profile")
+
+// RequireLog checks that a log exists for the profile without creating one, so
+// asking for the logs of a name that was never used leaves nothing behind.
+func RequireLog(profile string) error {
+	if !validProfileName(profile) {
+		return fmt.Errorf("invalid Companion profile %q", profile)
+	}
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("find AgentClip cache directory: %w", err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "agentclip", "logs", profile+".log")); err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: %q", ErrNoLog, profile)
+	}
+	return nil
+}
 
 func NewLogger(profile string) (*Logger, error) {
 	if !validProfileName(profile) {
