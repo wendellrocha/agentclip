@@ -366,7 +366,9 @@ func (p *HTTPProvider) downloadFile(ctx context.Context, directory string, item 
 		return MaterializedFile{}, fmt.Errorf("clipboard file metadata changed during transfer")
 	}
 	name := filepath.Base(item.Name)
-	if name == "." || name == "" || name == string(filepath.Separator) {
+	// filepath.Base keeps ".." as is, which would name the parent directory; only
+	// an item id is a safe name for these, not luck in the collision check below.
+	if name == "." || name == ".." || name == "" || name == string(filepath.Separator) {
 		name = item.ID
 	}
 	path := filepath.Join(directory, name)
