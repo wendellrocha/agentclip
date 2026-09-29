@@ -180,14 +180,29 @@ jobs:
           sh -n scripts/install.sh
           sh scripts/install.sh --help
 
+      - name: Test installer authenticity checks
+        if: runner.os != 'Windows'
+        run: sh scripts/test-install.sh
+
       - name: Shellcheck installer
         if: runner.os == 'Linux'
-        run: shellcheck -S warning scripts/install.sh
+        run: shellcheck -S warning scripts/install.sh scripts/test-install.sh
 
       - name: Validate PowerShell installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: "[scriptblock]::Create((Get-Content -Raw scripts/install.ps1)) | Out-Null"
+
+      - name: Test installer authenticity checks (PowerShell 7)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-install.ps1
+
+      # Windows PowerShell 5.1 is what most users run the installer with.
+      - name: Test installer authenticity checks (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/test-install.ps1
 
   workflows:
     name: Workflow lint
