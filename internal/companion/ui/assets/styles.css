@@ -1,12 +1,6 @@
 :root {
   color-scheme: dark;
-  --wallpaper-base: #a55c24;
-  --wallpaper-light: #b96e30;
-  --wallpaper-dark: #874514;
   --canvas: #101214;
-  --canvas-border: #303234;
-  --canvas-radius: 15px;
-  --canvas-inset: clamp(16px, 2.55vw, 52px);
   --surface: #1a1e23;
   --surface-raised: #20252b;
   --stroke: #2c3239;
@@ -18,17 +12,13 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-html { min-width: 320px; min-height: 100%; background: var(--wallpaper-base); }
+html { min-width: 320px; min-height: 100%; background: var(--canvas); }
 body {
-  position: relative; isolation: isolate; min-width: 320px; min-height: 100vh;
-  margin: 0; overflow-x: hidden; color: var(--text); font-family: var(--font);
-  background-color: var(--wallpaper-base);
-  background-image: repeating-linear-gradient(162deg, transparent 0 60px, rgb(71 35 11 / 20%) 61px 76px, transparent 77px 148px), repeating-conic-gradient(from 45deg, var(--wallpaper-dark) 0% 25%, var(--wallpaper-light) 0% 50%);
-  background-position: 0 0, 0 0; background-size: 100% 100%, 34px 34px;
+  min-width: 320px; min-height: 100vh; margin: 0; overflow-x: hidden;
+  color: var(--text); font-family: var(--font); background: var(--canvas);
 }
-body::before { position: fixed; z-index: -1; inset: var(--canvas-inset); content: ""; border: 2px solid var(--canvas-border); border-radius: var(--canvas-radius); background: var(--canvas); box-shadow: 0 12px 35px rgb(54 25 6 / 24%), inset 0 1px rgb(255 255 255 / 2%); }
 
-.app-shell { width: min(100% - 2 * var(--canvas-inset) - 4px, 2090px); min-height: calc(100vh - 2 * var(--canvas-inset) - 4px); margin: var(--canvas-inset) auto; padding: clamp(24px, 3vw, 54px); display: flex; flex-direction: column; }
+.app-shell { width: min(100%, 2090px); min-height: 100vh; margin: 0 auto; padding: clamp(24px, 3vw, 54px); display: flex; flex-direction: column; }
 .nav { display: flex; justify-content: space-between; align-items: center; gap: 28px; padding-bottom: 30px; border-bottom: 1px solid #292e34; }
 .brand-lockup { display: flex; align-items: center; gap: 15px; min-width: 0; }
 .brand-mark { display: block; flex: 0 0 48px; width: 48px; height: 48px; }
@@ -109,6 +99,6 @@ body::before { position: fixed; z-index: -1; inset: var(--canvas-inset); content
 
 @media (min-width: 1600px) { .file-card { padding: 25px 26px; } .file-list { gap: 15px; } }
 @media (max-width: 1100px) { .dashboard-grid { grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr); } .file-card { grid-template-columns: 42px minmax(0, 1fr); } .file-actions { grid-column: 2; align-items: flex-start; flex-direction: row; flex-wrap: wrap; } .primary-actions, .secondary-actions { justify-content: flex-start; } }
-@media (max-width: 760px) { :root { --canvas-inset: 12px; --canvas-radius: 12px; } .app-shell { padding: 22px 18px; } .nav { align-items: flex-start; flex-direction: column; gap: 18px; padding-bottom: 20px; } .header-meta { align-items: flex-start; } .dashboard-grid { grid-template-columns: 1fr; gap: 26px; padding-top: 22px; } .stop-card { align-items: flex-start; flex-direction: column; } .file-card { padding: 16px; gap: 12px; } .file-actions { grid-column: 1 / -1; } .files-heading .h2 { font-size: 20px; } }
+@media (max-width: 760px) { .app-shell { padding: 22px 18px; } .nav { align-items: flex-start; flex-direction: column; gap: 18px; padding-bottom: 20px; } .header-meta { align-items: flex-start; } .dashboard-grid { grid-template-columns: 1fr; gap: 26px; padding-top: 22px; } .stop-card { align-items: flex-start; flex-direction: column; } .file-card { padding: 16px; gap: 12px; } .file-actions { grid-column: 1 / -1; } .files-heading .h2 { font-size: 20px; } }
 @media (max-width: 760px) { .offer-row { align-items: flex-start; flex-direction: column; } .offer-row .actions { justify-content: flex-start; } }
 @media (max-width: 480px) { .brand-mark { flex-basis: 42px; width: 42px; height: 42px; } .brand-mark img { width: 42px; height: 42px; } .brand-copy .t2 { max-width: 240px; line-height: 1.45; } .status-row { gap: 10px; } .clipboard-row dd { max-width: 68%; } .file-card { grid-template-columns: 36px minmax(0, 1fr); } .file-icon { width: 36px; height: 43px; } .primary-actions, .secondary-actions { width: 100%; flex-wrap: wrap; } .btn { min-height: 35px; padding: 0 10px; font-size: 10px; } .footer { gap: 10px; } }
