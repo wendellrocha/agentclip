@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +63,18 @@ func TestControlServerServesPrivateStatusViewAndStop(t *testing.T) {
 	if !strings.Contains(string(markup), "AgentClip Companion") {
 		t.Fatal("dashboard markup missing")
 	}
-	for _, expected := range []string{"btn-accept", "btn-reject", "Abrir conteúdo", "Copiar conteúdo", "Baixar", "Copiar caminho", "overflow-wrap:anywhere", "Aguardando sua aprovação", "Recebido em", "Arquivos recebidos", "formatDateTime", "formatBytes", "Atualização", "agentclip upgrade"} {
+	// The renderer lives in its own script, served next to the page.
+	scriptResponse, err := http.Get(ViewURL(control.State) + "assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scriptResponse.Body.Close()
+	script, err := io.ReadAll(scriptResponse.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markup = append(markup, script...)
+	for _, expected := range []string{"btn-accept", "btn-reject", "Abrir conteúdo", "Copiar conteúdo", "Baixar", "Copiar caminho", "Aguardando sua aprovação", "Recebido em", "Arquivos recebidos", "formatDateTime", "formatBytes", "Atualização", "agentclip upgrade"} {
 		if !strings.Contains(string(markup), expected) {
 			t.Fatalf("dashboard markup missing %q", expected)
 		}
@@ -110,6 +122,7 @@ func TestControlServerServesDashboardBrandAssets(t *testing.T) {
 		{"assets/agentclip-mark.svg", "image/svg+xml"},
 		{"assets/favicon.svg", "image/svg+xml"},
 		{"assets/styles.css", "text/css; charset=utf-8"},
+		{"assets/app.js", "text/javascript; charset=utf-8"},
 	} {
 		response, err := http.Get(ViewURL(control.State) + asset.path)
 		if err != nil {
@@ -123,6 +136,57 @@ func TestControlServerServesDashboardBrandAssets(t *testing.T) {
 		if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != asset.contentType || len(data) == 0 {
 			t.Fatalf("asset %s response = %d %q (%d bytes)", asset.path, response.StatusCode, response.Header.Get("Content-Type"), len(data))
 		}
+	}
+}
+
+// File names come from the remote server, so the page must not depend on inline
+// code: with 'self' only, an injected <script>, event handler or style attribute
+// would not run even if the manual escaping missed a field.
+func TestDashboardCSPForbidsInlineCodeAndThePageNeedsNone(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	control, err := StartControl("dev", func() any { return map[string]any{} }, func() {}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+
+	response, err := http.Get(ViewURL(control.State))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	policy := response.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"script-src 'self'", "style-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("CSP %q lacks %q", policy, want)
+		}
+	}
+	for _, forbidden := range []string{"unsafe-inline", "unsafe-eval", "data:  script", "*"} {
+		if strings.Contains(strings.ReplaceAll(policy, "img-src 'self' data:", ""), forbidden) {
+			t.Errorf("CSP %q contains %q", policy, forbidden)
+		}
+	}
+
+	html := string(page)
+	if strings.Contains(html, "{{BASE}}") {
+		t.Error("the page still holds an unreplaced {{BASE}}")
+	}
+	if !strings.Contains(html, `<script src="`+strings.TrimSuffix(strings.TrimPrefix(ViewURL(control.State), "http://"+control.State.Address), "/")+`/assets/app.js">`) {
+		t.Errorf("the page does not load its script from its own assets:\n%s", html)
+	}
+	inline := regexp.MustCompile(`(?i)<script>|<script\s+[^>]*>\s*[^<\s]|<style|\sstyle=|\son[a-z]+=`)
+	if match := inline.FindString(html); match != "" {
+		t.Errorf("the page contains inline code (%q)", match)
+	}
+
+	// The markup the script builds is subject to the same policy.
+	script, err := dashboardFiles.ReadFile("ui/assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if match := regexp.MustCompile(`(?i)\sstyle=|\son(click|error|load|mouse[a-z]*)=|javascript:|setAttribute\(.style`).FindString(string(script)); match != "" {
+		t.Errorf("app.js builds markup the policy would block (%q)", match)
 	}
 }
 

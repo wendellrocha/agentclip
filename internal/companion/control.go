@@ -89,7 +89,7 @@ func StartControl(profile string, snapshot func() any, stop func(), inboundActio
 		if r.URL.Path == prefix || r.URL.Path == prefix+"/" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 			page, err := dashboardFiles.ReadFile("ui/index.html")
 			if err != nil {
 				http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
@@ -109,6 +109,8 @@ func StartControl(profile string, snapshot func() any, stop func(), inboundActio
 			switch {
 			case strings.HasSuffix(name, ".css"):
 				contentType = "text/css; charset=utf-8"
+			case strings.HasSuffix(name, ".js"):
+				contentType = "text/javascript; charset=utf-8"
 			case strings.HasSuffix(name, ".svg"):
 				contentType = "image/svg+xml"
 			}

@@ -21,6 +21,12 @@ func TestDashboardStylesheetRowClassesAreUsedByThePage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The rows are built by the page's script, which lives in its own file.
+	script, err := dashboardFiles.ReadFile("ui/assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page = append(page, script...)
 
 	declared := map[string]bool{}
 	for _, match := range regexp.MustCompile(`\.([a-z][a-z0-9]*(?:-[a-z0-9]+)*-row)\b`).FindAllStringSubmatch(string(styles), -1) {
@@ -31,7 +37,7 @@ func TestDashboardStylesheetRowClassesAreUsedByThePage(t *testing.T) {
 	}
 	for class := range declared {
 		if !strings.Contains(string(page), class) {
-			t.Errorf("stylesheet styles .%s but index.html never applies it", class)
+			t.Errorf("stylesheet styles .%s but neither index.html nor app.js applies it", class)
 		}
 	}
 }
