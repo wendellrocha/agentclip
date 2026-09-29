@@ -330,8 +330,9 @@ func uploadCommand(ctx context.Context, destination, identityFile, digest string
 	return remoteSSHCommandContext(ctx, destination, identityFile, "sh -c "+shellQuote(script))
 }
 
-// fetchRelease is upgrader.Fetch, replaceable in tests.
-var fetchRelease = upgrader.Fetch
+// FetchRelease is how the release binary is downloaded and verified. It is a
+// variable only so tests of the callers, which have no network, can replace it.
+var FetchRelease = upgrader.Fetch
 
 // InstallTimeout bounds the whole installation on one server: the version probe,
 // the platform probe, the download and verification, and the upload.
@@ -388,7 +389,7 @@ func InstallVerified(ctx context.Context, destination, identityFile, tag string,
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", destination, err)
 	}
-	fetched, err := fetchRelease(ctx, upgrader.Options{Version: tag, GOOS: goos, GOARCH: goarch, SkipAttestation: os.Getenv(upgrader.SkipAttestationEnv) == "1"})
+	fetched, err := FetchRelease(ctx, upgrader.Options{Version: tag, GOOS: goos, GOARCH: goarch, SkipAttestation: os.Getenv(upgrader.SkipAttestationEnv) == "1"})
 	if err != nil {
 		return false, fmt.Errorf("verify AgentClip %s for %s/%s: %w", tag, goos, goarch, err)
 	}
