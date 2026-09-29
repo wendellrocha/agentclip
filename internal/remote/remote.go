@@ -3,8 +3,12 @@
 package remote
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,13 +16,11 @@ import (
 
 	"github.com/wendellrocha/agentclip/internal/companion"
 	"github.com/wendellrocha/agentclip/internal/release"
+	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
 
 const (
 	releaseRepository = "wendellrocha/agentclip"
-	// skipAttestationEnv opts the installer out of the build attestation
-	// check. It mirrors upgrader.SkipAttestationEnv.
-	skipAttestationEnv = "AGENTCLIP_SKIP_ATTESTATION"
 )
 
 func remotePreflightCommand(destination, agentExecutable string) *exec.Cmd {
@@ -107,14 +109,6 @@ func remoteLoginCommandWithIdentity(destination, identityFile string, arguments 
 	}
 	script := "export PATH=\"$HOME/.local/bin:$PATH\"; " + strings.Join(quoted, " ")
 	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(script))
-}
-
-func remoteInstallCommand(destination, tag string) *exec.Cmd {
-	return InstallCommandWithIdentity(destination, "", tag)
-}
-
-func InstallCommandWithIdentity(destination, identityFile, tag string) *exec.Cmd {
-	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(remoteInstallScript(tag)))
 }
 
 func remoteSSHCommand(destination, identityFile, remoteCommand string) *exec.Cmd {
@@ -262,23 +256,111 @@ func bootstrapSSHKeyCommand(destination, publicKey string) *exec.Cmd {
 	return exec.Command("ssh", "-o", "NumberOfPasswordPrompts=1", destination, "sh -lc "+shellQuote(script))
 }
 
-func remoteInstallScript(tag string) string {
-	// The installer detects the remote OS and architecture, verifies the release
-	// checksum, and installs only into the remote user's home directory.
-	installerURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/scripts/install.sh", releaseRepository, tag)
-	// The attestation opt-out is command-wide: without forwarding it, an
-	// upgrade run with it set would update this machine and then fail on every
-	// server while the GitHub API is unavailable.
-	shell := "sh"
-	if os.Getenv(skipAttestationEnv) == "1" {
-		shell = skipAttestationEnv + "=1 sh"
-	}
-	return strings.Join([]string{
-		"set -eu",
-		"curl -fsSL --retry 3 " + shellQuote(installerURL) + " | " + shell + " -s -- --version " + shellQuote(tag),
-	}, "; ")
-}
-
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+// platformMarker prefixes the line that carries the server's `uname -sm`.
+const platformMarker = "agentclip-platform="
+
+func platformCommand(destination, identityFile string) *exec.Cmd {
+	script := "printf '" + platformMarker + "%s\\n' \"$(uname -sm)\""
+	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(script))
+}
+
+// PlatformFromOutput reads the release platform out of platformCommand's output.
+// Only Linux and macOS servers are supported, as the installers always were.
+func PlatformFromOutput(output string) (goos, goarch string, err error) {
+	var system, machine string
+	for _, line := range strings.Split(output, "\n") {
+		if value, found := strings.CutPrefix(strings.TrimSpace(line), platformMarker); found {
+			fields := strings.Fields(value)
+			if len(fields) == 2 {
+				system, machine = fields[0], fields[1]
+			}
+		}
+	}
+	switch system {
+	case "Linux":
+		goos = "linux"
+	case "Darwin":
+		goos = "darwin"
+	default:
+		return "", "", fmt.Errorf("unsupported server operating system %q; AgentClip installs on Linux and macOS servers", system)
+	}
+	switch machine {
+	case "x86_64", "amd64":
+		goarch = "amd64"
+	case "aarch64", "arm64":
+		goarch = "arm64"
+	default:
+		return "", "", fmt.Errorf("unsupported server CPU architecture %q", machine)
+	}
+	return goos, goarch, nil
+}
+
+// uploadCommand receives an executable on stdin and installs it as
+// ~/.local/bin/agentclip, but only if it hashes to digest. A dropped
+// connection then leaves the previous binary in place instead of a truncated one.
+func uploadCommand(destination, identityFile, digest string) *exec.Cmd {
+	script := strings.Join([]string{
+		"set -eu",
+		"umask 077",
+		"dir=\"$HOME/.local/bin\"",
+		"mkdir -p \"$dir\"",
+		"tmp=\"$dir/.agentclip-new.$$\"",
+		"trap 'rm -f \"$tmp\"' EXIT",
+		"cat > \"$tmp\"",
+		"if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum \"$tmp\" | cut -d' ' -f1); else actual=$(shasum -a 256 \"$tmp\" | cut -d' ' -f1); fi",
+		"[ \"$actual\" = " + shellQuote(digest) + " ] || { echo 'uploaded binary does not match the verified checksum' >&2; exit 1; }",
+		"chmod 755 \"$tmp\"",
+		"mv -f \"$tmp\" \"$dir/agentclip\"",
+	}, "; ")
+	return remoteSSHCommand(destination, identityFile, "sh -c "+shellQuote(script))
+}
+
+// fetchRelease is upgrader.Fetch, replaceable in tests.
+var fetchRelease = upgrader.Fetch
+
+// InstallVerified puts the release binary for tag on the server without running
+// any script there. This machine downloads the binary for the server's platform
+// and verifies it (checksum, and the build attestation for releases that have
+// one), then sends it over the existing SSH connection; the server only
+// confirms the bytes it received are the ones verified. Notices about checks
+// that did not apply go to stderr.
+func InstallVerified(ctx context.Context, destination, identityFile, tag string, stderr io.Writer) error {
+	output, err := platformCommand(destination, identityFile).Output()
+	if err != nil {
+		return fmt.Errorf("read the platform of %s: %w", destination, err)
+	}
+	goos, goarch, err := PlatformFromOutput(string(output))
+	if err != nil {
+		return fmt.Errorf("%s: %w", destination, err)
+	}
+	fetched, err := fetchRelease(ctx, upgrader.Options{Version: tag, GOOS: goos, GOARCH: goarch, SkipAttestation: os.Getenv(upgrader.SkipAttestationEnv) == "1"})
+	if err != nil {
+		return fmt.Errorf("verify AgentClip %s for %s/%s: %w", tag, goos, goarch, err)
+	}
+	defer fetched.Cleanup()
+	if fetched.Notice != "" && stderr != nil {
+		fmt.Fprintln(stderr, fetched.Notice)
+	}
+	binary, err := os.Open(fetched.Path)
+	if err != nil {
+		return err
+	}
+	defer binary.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, binary); err != nil {
+		return err
+	}
+	if _, err := binary.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	upload := uploadCommand(destination, identityFile, hex.EncodeToString(hash.Sum(nil)))
+	upload.Stdin = binary
+	if combined, err := upload.CombinedOutput(); err != nil {
+		return fmt.Errorf("install AgentClip on %s: %w: %s", destination, err, strings.TrimSpace(string(combined)))
+	}
+	return nil
 }

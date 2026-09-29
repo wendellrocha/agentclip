@@ -1,6 +1,8 @@
 package remote
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,49 +52,150 @@ func TestRemoteLoginCommandEscapesArgumentsInsideLoginShell(t *testing.T) {
 	}
 }
 
-func TestRemoteInstallCommandPinsTheRequestedRelease(t *testing.T) {
-	command := remoteInstallCommand("bastion-m2", "v0.2.0")
-	if len(command.Args) != 3 {
-		t.Fatalf("ssh arguments = %#v; expected destination plus one remote command", command.Args)
+func TestPlatformFromOutputMapsServersAndRefusesTheRest(t *testing.T) {
+	for output, want := range map[string]string{
+		"agentclip-platform=Linux x86_64\n":  "linux/amd64",
+		"agentclip-platform=Linux aarch64\n": "linux/arm64",
+		"agentclip-platform=Darwin arm64\n":  "darwin/arm64",
+		"agentclip-platform=Darwin x86_64\n": "darwin/amd64",
+		// A login shell may print a banner before the marked line.
+		"Welcome to host\nLinux 6.1 is great\nagentclip-platform=Linux x86_64\n": "linux/amd64",
+	} {
+		goos, goarch, err := PlatformFromOutput(output)
+		if err != nil || goos+"/"+goarch != want {
+			t.Errorf("PlatformFromOutput(%q) = %s/%s, %v; want %s", output, goos, goarch, err, want)
+		}
 	}
-	if !strings.HasPrefix(command.Args[2], "sh -lc '") {
-		t.Fatalf("remote installer command = %q", command.Args[2])
-	}
-	script := remoteInstallScript("v0.2.0")
-	if !strings.Contains(script, "https://raw.githubusercontent.com/wendellrocha/agentclip/v0.2.0/scripts/install.sh") || !strings.Contains(script, "--version 'v0.2.0'") {
-		t.Fatalf("remote installer script = %q", script)
+	for _, output := range []string{"", "Linux x86_64\n", "agentclip-platform=FreeBSD amd64\n", "agentclip-platform=Linux riscv64\n", "agentclip-platform=Linux\n", "agentclip-platform=\n"} {
+		if _, _, err := PlatformFromOutput(output); err == nil {
+			t.Errorf("PlatformFromOutput(%q) was accepted", output)
+		}
 	}
 }
 
-func TestRemoteInstallForwardsTheAttestationOptOutOnlyWhenExplicitlySet(t *testing.T) {
-	for value, wantForwarded := range map[string]bool{"1": true, "": false, "0": false, "true": false, "yes": false} {
+// fakeSSH puts an `ssh` on PATH that runs the remote command locally, with HOME
+// pointing at a directory that stands in for the server's home. It lets the
+// upload run for real without a network.
+func fakeSSH(t *testing.T) (home string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake ssh is a POSIX shell script")
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\nfor last; do :; done\nexec sh -c \"$last\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home = t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", home)
+	return home
+}
+
+func stubFetch(t *testing.T, content string, notice string, captured *upgrader.Options) {
+	t.Helper()
+	previous := fetchRelease
+	t.Cleanup(func() { fetchRelease = previous })
+	fetchRelease = func(_ context.Context, options upgrader.Options) (upgrader.Fetched, error) {
+		if captured != nil {
+			*captured = options
+		}
+		path := filepath.Join(t.TempDir(), "agentclip")
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return upgrader.Fetched{Path: path, Notice: notice}, nil
+	}
+}
+
+func TestInstallVerifiedSendsTheVerifiedBinaryWithoutRunningAScriptFromTheNetwork(t *testing.T) {
+	home := fakeSSH(t)
+	var options upgrader.Options
+	stubFetch(t, "verified binary", "no attestation for this release", &options)
+	var stderr strings.Builder
+	if err := InstallVerified(context.Background(), "host", "", "v0.7.2", &stderr); err != nil {
+		t.Fatal(err)
+	}
+	installed := filepath.Join(home, ".local", "bin", "agentclip")
+	data, err := os.ReadFile(installed)
+	if err != nil || string(data) != "verified binary" {
+		t.Fatalf("installed = %q, %v", data, err)
+	}
+	if info, _ := os.Stat(installed); info.Mode().Perm() != 0o755 {
+		t.Errorf("mode = %v, want 0755", info.Mode().Perm())
+	}
+	if options.Version != "v0.7.2" || options.GOOS != runtime.GOOS || options.SkipAttestation {
+		t.Errorf("fetch options = %+v", options)
+	}
+	if !strings.Contains(stderr.String(), "no attestation for this release") {
+		t.Errorf("the notice was not shown: %q", stderr.String())
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(home, ".local", "bin", ".agentclip-new.*"))
+	if len(leftovers) != 0 {
+		t.Errorf("temporary files left behind: %v", leftovers)
+	}
+}
+
+func TestInstallVerifiedForwardsTheAttestationOptOutOnlyWhenExplicitlySet(t *testing.T) {
+	for value, want := range map[string]bool{"1": true, "": false, "0": false, "true": false} {
 		t.Run("value="+value, func(t *testing.T) {
-			t.Setenv(skipAttestationEnv, value)
-			script := remoteInstallScript("v0.7.1")
-			forwarded := strings.Contains(script, "| "+skipAttestationEnv+"=1 sh -s -- --version 'v0.7.1'")
-			if forwarded != wantForwarded {
-				t.Fatalf("forwarded = %v, want %v in %q", forwarded, wantForwarded, script)
+			fakeSSH(t)
+			t.Setenv(upgrader.SkipAttestationEnv, value)
+			var options upgrader.Options
+			stubFetch(t, "binary", "", &options)
+			if err := InstallVerified(context.Background(), "host", "", "v0.7.2", nil); err != nil {
+				t.Fatal(err)
 			}
-			if !wantForwarded && strings.Contains(script, skipAttestationEnv) {
-				t.Fatalf("opt-out leaked into %q", script)
-			}
-			command := InstallCommandWithIdentity("bastion-m2", "", "v0.7.1")
-			if got := strings.Contains(command.Args[len(command.Args)-1], skipAttestationEnv+"=1"); got != wantForwarded {
-				t.Fatalf("ssh command forwards the opt-out = %v, want %v", got, wantForwarded)
+			if options.SkipAttestation != want {
+				t.Fatalf("SkipAttestation = %v, want %v", options.SkipAttestation, want)
 			}
 		})
 	}
 }
 
-func TestSkipAttestationEnvMatchesTheUpgrader(t *testing.T) {
-	if skipAttestationEnv != upgrader.SkipAttestationEnv {
-		t.Fatalf("remote uses %q but the upgrader uses %q", skipAttestationEnv, upgrader.SkipAttestationEnv)
+// A binary that fails verification never reaches the server, and one that
+// arrives damaged never replaces the working one.
+func TestInstallVerifiedRefusesUnverifiedAndDamagedBinaries(t *testing.T) {
+	home := fakeSSH(t)
+	installed := filepath.Join(home, ".local", "bin", "agentclip")
+	if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installed, []byte("previous"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := fetchRelease
+	t.Cleanup(func() { fetchRelease = previous })
+	fetchRelease = func(context.Context, upgrader.Options) (upgrader.Fetched, error) {
+		return upgrader.Fetched{}, errors.New("release checksum does not match checksums.txt")
+	}
+	err := InstallVerified(context.Background(), "host", "", "v0.7.2", nil)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("an unverified binary was not refused: %v", err)
+	}
+	if data, _ := os.ReadFile(installed); string(data) != "previous" {
+		t.Fatalf("the installed binary changed to %q", data)
+	}
+
+	// The bytes that arrive do not match the digest that was verified.
+	command := uploadCommand("host", "", strings.Repeat("0", 64))
+	command.Stdin = strings.NewReader("truncated or tampered")
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "does not match") {
+		t.Fatalf("a mismatching upload was accepted: %v %s", err, output)
+	}
+	if data, _ := os.ReadFile(installed); string(data) != "previous" {
+		t.Fatalf("a damaged upload replaced the installed binary: %q", data)
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(installed), ".agentclip-new.*")); len(leftovers) != 0 {
+		t.Fatalf("temporary files left behind: %v", leftovers)
 	}
 }
 
 func TestManagedSSHCommandsUseDedicatedIdentityWithoutPrompts(t *testing.T) {
 	identity := filepath.Join(t.TempDir(), "agentclip-key")
-	install := InstallCommandWithIdentity("bastion-m2", identity, "v0.2.0")
+	install := uploadCommand("bastion-m2", identity, strings.Repeat("0", 64))
 	login := remoteLoginCommandWithIdentity("bastion-m2", identity, "true")
 	for _, command := range []*exec.Cmd{install, login, sshKeyCheckCommand("bastion-m2", identity)} {
 		arguments := strings.Join(command.Args, " ")
