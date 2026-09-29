@@ -33,9 +33,11 @@ matches() { # matches <digest> <repository> <version>
     # A sourced script inherits the positional parameters, which its own
     # option parsing would reject.
     set --
-    AGENTCLIP_INSTALLER_LIB=1
+    export AGENTCLIP_INSTALLER_LIB=1
     # shellcheck disable=SC1090
     . "$installer"
+    # The sourced installer reads these variables, which shellcheck cannot see.
+    # shellcheck disable=SC2034
     actual_checksum="$digest_under_test" repository="$repository_under_test" requested_version="$version_under_test"
     printf '%s' "$real_payload" | decode_base64 | statement_matches
   )
