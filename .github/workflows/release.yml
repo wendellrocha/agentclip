@@ -139,6 +139,9 @@ jobs:
         with:
           tag_name: ${{ env.VERSION }}
           body_path: release-notes.md
+          # A suffix such as -rc.1 marks a pre-release, which GitHub never serves
+          # as "latest", so installers and the update watcher ignore it.
+          prerelease: ${{ contains(env.VERSION, '-') }}
           files: |
             dist/*.tar.gz
             dist/*.zip
