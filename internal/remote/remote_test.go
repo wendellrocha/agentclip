@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
 
 func TestRemotePreflightPassesTheWholeCheckAsOneRemoteCommand(t *testing.T) {
@@ -58,6 +60,32 @@ func TestRemoteInstallCommandPinsTheRequestedRelease(t *testing.T) {
 	script := remoteInstallScript("v0.2.0")
 	if !strings.Contains(script, "https://raw.githubusercontent.com/wendellrocha/agentclip/v0.2.0/scripts/install.sh") || !strings.Contains(script, "--version 'v0.2.0'") {
 		t.Fatalf("remote installer script = %q", script)
+	}
+}
+
+func TestRemoteInstallForwardsTheAttestationOptOutOnlyWhenExplicitlySet(t *testing.T) {
+	for value, wantForwarded := range map[string]bool{"1": true, "": false, "0": false, "true": false, "yes": false} {
+		t.Run("value="+value, func(t *testing.T) {
+			t.Setenv(skipAttestationEnv, value)
+			script := remoteInstallScript("v0.7.1")
+			forwarded := strings.Contains(script, "| "+skipAttestationEnv+"=1 sh -s -- --version 'v0.7.1'")
+			if forwarded != wantForwarded {
+				t.Fatalf("forwarded = %v, want %v in %q", forwarded, wantForwarded, script)
+			}
+			if !wantForwarded && strings.Contains(script, skipAttestationEnv) {
+				t.Fatalf("opt-out leaked into %q", script)
+			}
+			command := InstallCommandWithIdentity("bastion-m2", "", "v0.7.1")
+			if got := strings.Contains(command.Args[len(command.Args)-1], skipAttestationEnv+"=1"); got != wantForwarded {
+				t.Fatalf("ssh command forwards the opt-out = %v, want %v", got, wantForwarded)
+			}
+		})
+	}
+}
+
+func TestSkipAttestationEnvMatchesTheUpgrader(t *testing.T) {
+	if skipAttestationEnv != upgrader.SkipAttestationEnv {
+		t.Fatalf("remote uses %q but the upgrader uses %q", skipAttestationEnv, upgrader.SkipAttestationEnv)
 	}
 }
 

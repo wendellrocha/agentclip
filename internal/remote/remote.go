@@ -13,7 +13,12 @@ import (
 	"github.com/wendellrocha/agentclip/internal/companion"
 )
 
-const releaseRepository = "wendellrocha/agentclip"
+const (
+	releaseRepository = "wendellrocha/agentclip"
+	// skipAttestationEnv opts the installer out of the build attestation
+	// check. It mirrors upgrader.SkipAttestationEnv.
+	skipAttestationEnv = "AGENTCLIP_SKIP_ATTESTATION"
+)
 
 func remotePreflightCommand(destination, agentExecutable string) *exec.Cmd {
 	return remotePreflightCommandWithIdentity(destination, "", agentExecutable)
@@ -224,9 +229,16 @@ func remoteInstallScript(tag string) string {
 	// The installer detects the remote OS and architecture, verifies the release
 	// checksum, and installs only into the remote user's home directory.
 	installerURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/scripts/install.sh", releaseRepository, tag)
+	// The attestation opt-out is command-wide: without forwarding it, an
+	// upgrade run with it set would update this machine and then fail on every
+	// server while the GitHub API is unavailable.
+	shell := "sh"
+	if os.Getenv(skipAttestationEnv) == "1" {
+		shell = skipAttestationEnv + "=1 sh"
+	}
 	return strings.Join([]string{
 		"set -eu",
-		"curl -fsSL --retry 3 " + shellQuote(installerURL) + " | sh -s -- --version " + shellQuote(tag),
+		"curl -fsSL --retry 3 " + shellQuote(installerURL) + " | " + shell + " -s -- --version " + shellQuote(tag),
 	}, "; ")
 }
 
