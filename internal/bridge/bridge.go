@@ -290,6 +290,23 @@ func FileItem(path, mime string) (Item, error) {
 	return Item{Kind: ItemFile, MIMEType: mime, Name: filepath.Base(path), File: &FileRef{Path: path, Size: info.Size(), ModTime: info.ModTime(), SHA256: hex.EncodeToString(hash.Sum(nil))}}, nil
 }
 
+// FilePathItem names a local file for the control plane without reading it: it
+// checks the path and the size limit, which is cheap, and carries nothing but the
+// path. The daemon measures the file itself when it arms it, so hashing here as
+// well would read every file twice. ArmItems refuses this item on purpose, since
+// it holds no measurements.
+func FilePathItem(path, mime string) (Item, error) {
+	file, info, err := openRegularFile(path)
+	if err != nil {
+		return Item{}, err
+	}
+	file.Close()
+	if info.Size() > MaxFileBytes {
+		return Item{}, ErrFileTooLarge
+	}
+	return Item{Kind: ItemFile, MIMEType: mime, Name: filepath.Base(path), File: &FileRef{Path: path}}, nil
+}
+
 // openRegularFile is the one place a local path becomes an open file. The path
 // names one absolute, normalized location (never relative to the bridge's
 // working directory, or with ".." segments) and must be a regular file that is

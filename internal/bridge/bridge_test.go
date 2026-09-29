@@ -514,3 +514,28 @@ func TestFailedInboundDeliveryDoesNotLeakHostPaths(t *testing.T) {
 		}
 	}
 }
+
+// The path-only carrier is what the Companion hands to the control plane. It
+// validates cheaply, holds no measurements, and is never armed as it is.
+func TestFilePathItemCarriesOnlyThePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.csv")
+	if err := os.WriteFile(path, []byte("a,b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item, err := FilePathItem(path, "text/csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Kind != ItemFile || item.Name != "report.csv" || item.File == nil || *item.File != (FileRef{Path: path}) {
+		t.Fatalf("carrier = %+v", item)
+	}
+	b := New(time.Minute)
+	if _, err := b.ArmItems([]Item{item}); err == nil {
+		t.Fatal("an item without measurements must not be armed")
+	}
+	for _, bad := range []string{"", "relative.csv", filepath.Dir(path)} {
+		if _, err := FilePathItem(bad, ""); err == nil {
+			t.Errorf("FilePathItem(%q) was accepted", bad)
+		}
+	}
+}
