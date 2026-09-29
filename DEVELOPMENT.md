@@ -106,7 +106,12 @@ que ainda estiver rodando tentará abrir novamente o mesmo túnel reverso.
 Uma tag semântica `vX.Y.Z` dispara os workflows de teste e release. A release
 publica binários para Linux `amd64`/`arm64`, macOS `amd64`/`arm64` e Windows
 `amd64`, além de checksums (assinados com cosign, `checksums.txt.bundle`),
-o atestado de proveniência (`attestation.jsonl`) e instaladores.
+o atestado de proveniência (`attestation.jsonl`), um SBOM CycloneDX
+(`agentclip_vX.Y.Z_sbom.cdx.json`, coberto pelos checksums e pelo atestado) e
+instaladores. Antes de assinar, o workflow roda o `govulncheck` em modo binário
+sobre cada executável: uma vulnerabilidade conhecida no que será publicado
+(inclusive na biblioteca padrão do Go que o compilou) interrompe a release. As
+duas ferramentas têm versão fixada no workflow, porque esse job pode assinar.
 
 Os testes offline dos instaladores ficam em `scripts/test-install.sh` e
 `scripts/test-install.ps1`, com uma resposta real da API do GitHub em
