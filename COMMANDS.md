@@ -124,6 +124,10 @@ esteja lá não é substituída. Uma falha em um servidor não impede as
 tentativas nos demais nem a atualização local; o resumo final identifica cada
 perfil que falhou.
 
+Se esta máquina já está na release mais recente, nada é baixado, trocado ou
+reiniciado aqui: o comando só atualiza os servidores que ainda estiverem
+atrás, e o resumo distingue `updated` de `already up to date`.
+
 Antes da troca local, o comando registra e para os Companions saudáveis. Após
 a troca, reinicia somente esses perfis; um Companion que já estava parado
 permanece parado. Em Windows, a troca é concluída por um pequeno processo

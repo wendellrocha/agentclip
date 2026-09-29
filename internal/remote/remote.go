@@ -345,9 +345,10 @@ func installedVersion(destination, identityFile string) string {
 // attestation for releases that have one), then sends it over the existing SSH
 // connection. The server runs only a short fixed command sequence: it confirms
 // the bytes it received are the ones verified, then moves them into place.
-// A server that already has this version, or a newer one, is left alone.
+// It reports whether it changed the server: a server that already has this
+// version, or a newer one, is left alone and reported as unchanged.
 // Notices about checks that did not apply go to stderr.
-func InstallVerified(ctx context.Context, destination, identityFile, tag string, stderr io.Writer) error {
+func InstallVerified(ctx context.Context, destination, identityFile, tag string, stderr io.Writer) (bool, error) {
 	if installed := installedVersion(destination, identityFile); installed != "" {
 		if comparison, err := release.Compare(tag, installed); err == nil && comparison <= 0 {
 			if stderr != nil {
@@ -357,20 +358,20 @@ func InstallVerified(ctx context.Context, destination, identityFile, tag string,
 					fmt.Fprintf(stderr, "%s has AgentClip %s, newer than %s; leaving it unchanged.\n", destination, installed, tag)
 				}
 			}
-			return nil
+			return false, nil
 		}
 	}
 	output, err := platformCommand(destination, identityFile).Output()
 	if err != nil {
-		return fmt.Errorf("read the platform of %s: %w", destination, err)
+		return false, fmt.Errorf("read the platform of %s: %w", destination, err)
 	}
 	goos, goarch, err := PlatformFromOutput(string(output))
 	if err != nil {
-		return fmt.Errorf("%s: %w", destination, err)
+		return false, fmt.Errorf("%s: %w", destination, err)
 	}
 	fetched, err := fetchRelease(ctx, upgrader.Options{Version: tag, GOOS: goos, GOARCH: goarch, SkipAttestation: os.Getenv(upgrader.SkipAttestationEnv) == "1"})
 	if err != nil {
-		return fmt.Errorf("verify AgentClip %s for %s/%s: %w", tag, goos, goarch, err)
+		return false, fmt.Errorf("verify AgentClip %s for %s/%s: %w", tag, goos, goarch, err)
 	}
 	defer fetched.Cleanup()
 	if fetched.Notice != "" && stderr != nil {
@@ -378,20 +379,20 @@ func InstallVerified(ctx context.Context, destination, identityFile, tag string,
 	}
 	binary, err := os.Open(fetched.Path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer binary.Close()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, binary); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := binary.Seek(0, io.SeekStart); err != nil {
-		return err
+		return false, err
 	}
 	upload := uploadCommand(destination, identityFile, hex.EncodeToString(hash.Sum(nil)))
 	upload.Stdin = binary
 	if combined, err := upload.CombinedOutput(); err != nil {
-		return fmt.Errorf("install AgentClip on %s: %w: %s", destination, err, strings.TrimSpace(string(combined)))
+		return false, fmt.Errorf("install AgentClip on %s: %w: %s", destination, err, strings.TrimSpace(string(combined)))
 	}
-	return nil
+	return true, nil
 }
