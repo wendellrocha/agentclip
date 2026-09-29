@@ -13,6 +13,9 @@ Usage: install.sh [--version vX.Y.Z] [--install-dir PATH]
 Environment overrides: AGENTCLIP_REPOSITORY, AGENTCLIP_VERSION,
 AGENTCLIP_INSTALL_DIR.
 
+Releases from v0.7.1-rc.1 on are verified against their GitHub build
+attestation. AGENTCLIP_SKIP_ATTESTATION=1 installs with the SHA-256 check only.
+
 Without --version, the installer checks the latest release and downloads it
 only when it is newer than the installed AgentClip binary.
 EOF
@@ -99,6 +102,113 @@ version_compare() {
     }
   '
 }
+
+attestation_min_version="v0.7.1-rc.1"
+
+decode_base64() {
+  if printf '' | base64 -d >/dev/null 2>&1; then
+    base64 -d
+  elif printf '' | base64 -D >/dev/null 2>&1; then
+    base64 -D
+  else
+    openssl base64 -d -A
+  fi
+}
+
+# statement_matches reads an in-toto statement on stdin and succeeds only when
+# it covers the downloaded archive and was made by the release workflow of this
+# repository on the tag being installed. Values never contain spaces, so all
+# whitespace is dropped and the fields are compared literally.
+statement_matches() {
+  statement="$(tr -d ' \t\r\n')"
+  workflow="$(printf '%s' "$statement" | sed -n 's/.*"workflow":{\([^}]*\)}.*/\1/p')"
+  [ -n "$workflow" ] || return 1
+  printf '%s' "$statement" | grep -Fq "\"sha256\":\"${actual_checksum}\"" || return 1
+  printf '%s' "$workflow" | grep -Fq "\"repository\":\"https://github.com/${repository}\"" || return 1
+  printf '%s' "$workflow" | grep -Fq "\"path\":\".github/workflows/release.yml\"" || return 1
+  printf '%s' "$workflow" | grep -Fq "\"ref\":\"refs/tags/${requested_version}\"" || return 1
+}
+
+# Both verifiers return 0 when the archive is authentic, 1 when it is rejected
+# and 2 when the method could not run, so the next one can be tried.
+verify_with_gh() {
+  command -v gh >/dev/null 2>&1 || return 2
+  gh attestation verify --help >/dev/null 2>&1 || return 2
+  curl -fsSL --retry 3 -o "$temporary_directory/attestation.jsonl" "$base_url/attestation.jsonl" 2>/dev/null || return 2
+  echo "Verificando a autenticidade com gh attestation verify..."
+  gh attestation verify "$temporary_directory/$asset" \
+    --bundle "$temporary_directory/attestation.jsonl" \
+    --repo "$repository" \
+    --cert-identity "https://github.com/${repository}/.github/workflows/release.yml@refs/tags/${requested_version}" >/dev/null
+}
+
+verify_with_api() {
+  echo "Verificando a autenticidade na API de atestados do GitHub..."
+  api_status="$(curl -sS -o "$temporary_directory/attestations.json" -w '%{http_code}' \
+    -H "Accept: application/vnd.github+json" -H "User-Agent: agentclip-installer" \
+    "https://api.github.com/repos/${repository}/attestations/sha256:${actual_checksum}")" || {
+    echo "Could not reach the GitHub attestations API." >&2
+    return 2
+  }
+  case "$api_status" in
+    200) ;;
+    404)
+      echo "GitHub has no build attestation for ${asset}." >&2
+      return 1
+      ;;
+    *)
+      echo "The GitHub attestations API returned HTTP ${api_status}." >&2
+      return 2
+      ;;
+  esac
+  for payload in $(tr -d '\n' < "$temporary_directory/attestations.json" \
+    | grep -o '"payload"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | sed 's/.*:[[:space:]]*"\(.*\)"/\1/'); do
+    if printf '%s' "$payload" | decode_base64 2>/dev/null | statement_matches; then
+      return 0
+    fi
+  done
+  echo "No GitHub attestation matches ${asset} for ${requested_version}." >&2
+  return 1
+}
+
+verify_authenticity() {
+  if [ "${AGENTCLIP_SKIP_ATTESTATION:-}" = "1" ]; then
+    echo "Aviso: verificação de atestado ignorada (AGENTCLIP_SKIP_ATTESTATION=1); apenas o SHA-256 foi conferido." >&2
+    return 0
+  fi
+  if [ "$(version_compare "$requested_version" "$attestation_min_version")" = "-1" ]; then
+    echo "Aviso: ${requested_version} é anterior aos atestados de build; apenas o SHA-256 foi conferido." >&2
+    return 0
+  fi
+  verify_with_gh
+  case "$?" in
+    0)
+      echo "Autenticidade confirmada por gh attestation verify."
+      return 0
+      ;;
+    1)
+      echo "gh attestation verify rejected ${asset}." >&2
+      return 1
+      ;;
+  esac
+  verify_with_api
+  case "$?" in
+    0)
+      echo "Autenticidade confirmada pela API de atestados do GitHub."
+      echo "Para a verificação criptográfica completa, instale o gh e use gh attestation verify."
+      return 0
+      ;;
+    1) return 1 ;;
+  esac
+  echo "Could not verify the build attestation. Set AGENTCLIP_SKIP_ATTESTATION=1 to install with the SHA-256 check only." >&2
+  return 1
+}
+
+# Lets the tests load the functions above without installing anything.
+if [ "${AGENTCLIP_INSTALLER_LIB:-}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 case "$(uname -s)" in
   Darwin) os="darwin" ;;
@@ -200,6 +310,11 @@ if [ "$expected_checksum" != "$actual_checksum" ]; then
   echo "Checksum mismatch for ${asset}; refusing to install it." >&2
   exit 1
 fi
+
+verify_authenticity || {
+  echo "Refusing to install ${asset}: its authenticity could not be confirmed." >&2
+  exit 1
+}
 
 tar -xzf "$temporary_directory/$asset" -C "$temporary_directory"
 binary="$temporary_directory/agentclip_${requested_version}_${os}_${arch}/agentclip"
