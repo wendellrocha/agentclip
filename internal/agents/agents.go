@@ -37,16 +37,32 @@ func Configure(profile companion.Profile, selection string) ([]Adapter, error) {
 	if err := remote.PreflightForProfile(profile, adapter.Executable).Run(); err != nil {
 		return nil, fmt.Errorf("remote preflight failed: install `agentclip` and `%s` on %s, or retry with --skip-agent: %w", adapter.Executable, profile.Destination, err)
 	}
+	if err := checkRemoteVersion(profile); err != nil {
+		return nil, err
+	}
 	if err := configureOne(profile, adapter); err != nil {
 		return nil, err
 	}
 	return []Adapter{adapter}, nil
 }
 
+// checkRemoteVersion refuses a server whose agentclip is too old for what is
+// about to be configured, instead of registering an MCP entry that fails later.
+func checkRemoteVersion(profile companion.Profile) error {
+	output, err := remote.VersionForProfile(profile).Output()
+	if err != nil {
+		return fmt.Errorf("read the agentclip version on %s: %w", profile.Destination, err)
+	}
+	return remote.CheckVersion(profile.Destination, string(output))
+}
+
 func configureAll(profile companion.Profile) ([]Adapter, error) {
 	output, err := remote.SupportedAgentsForProfile(profile).Output()
 	if err != nil {
 		return nil, fmt.Errorf("remote preflight failed: install `agentclip` on %s, or retry with --skip-agent: %w", profile.Destination, err)
+	}
+	if err := checkRemoteVersion(profile); err != nil {
+		return nil, err
 	}
 	var configured []Adapter
 	for _, agentID := range strings.Fields(string(output)) {
