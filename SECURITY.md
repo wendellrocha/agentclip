@@ -29,9 +29,9 @@ Os instaladores e o `agentclip upgrade` confirmam automaticamente o atestado a
 partir da `v0.7.1-rc.1`. Veja "Verificar a autenticidade de um release" no
 [README](README.md), que também descreve os limites dessa verificação.
 
-Cada release também publica um SBOM CycloneDX (`agentclip_vX.Y.Z_sbom.cdx.json`)
-com os módulos compilados nos binários, coberto pelos mesmos checksums e pelo
-atestado. O workflow de release roda o `govulncheck` em cada binário antes de
+Cada release também publica um SBOM CycloneDX por plataforma
+(`agentclip_vX.Y.Z_<os>_<arch>.cdx.json`) com os módulos compilados naquele
+binário, coberto pelos mesmos checksums e pelo atestado. O workflow de release roda o `govulncheck` em cada binário antes de
 assinar e é interrompido se encontrar uma vulnerabilidade conhecida.
 
 ## Escopo
@@ -72,9 +72,9 @@ automatically from `v0.7.1-rc.1` on. See "Verifying the authenticity of a
 release" in the [English README](README.en.md), which also describes the limits
 of that verification.
 
-Each release also publishes a CycloneDX SBOM (`agentclip_vX.Y.Z_sbom.cdx.json`)
-listing the modules compiled into the binaries, covered by the same checksums
-and attestation. The release workflow scans every binary with `govulncheck`
+Each release also publishes one CycloneDX SBOM per platform
+(`agentclip_vX.Y.Z_<os>_<arch>.cdx.json`) listing the modules compiled into that
+binary, covered by the same checksums and attestation. The release workflow scans every binary with `govulncheck`
 before signing and stops if it finds a known vulnerability.
 
 ## Scope
