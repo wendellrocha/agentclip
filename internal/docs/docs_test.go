@@ -84,10 +84,10 @@ func TestTheReadmesLinkToEachOther(t *testing.T) {
 // Both READMEs describe the same environment variable and the same first
 // release with an attestation, so they must name the same values.
 func TestReadmesAgreeOnTheAttestationSettings(t *testing.T) {
-	for _, name := range []string{"README.md", "README.en.md", "SECURITY.md"} {
-		content := read(t, name)
-		if !strings.Contains(content, "v0.7.1-rc.1") {
-			t.Errorf("%s does not mention the first release with an attestation", name)
+	// SECURITY.md holds both languages, so the version must appear in each.
+	for name, want := range map[string]int{"README.md": 1, "README.en.md": 1, "SECURITY.md": 2} {
+		if got := strings.Count(read(t, name), "v0.7.1-rc.1"); got < want {
+			t.Errorf("%s mentions the first release with an attestation %d time(s), want at least %d", name, got, want)
 		}
 	}
 	for _, name := range []string{"README.md", "README.en.md"} {
