@@ -288,3 +288,73 @@ func TestShutdownStopsTheDaemon(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestControlPathCannotSendTheTokenToAnotherHost(t *testing.T) {
+	var evilRequests, legitRequests []string
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		evilRequests = append(evilRequests, r.Header.Get("Authorization")+" "+r.URL.Path)
+	}))
+	defer evil.Close()
+	legit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		legitRequests = append(legitRequests, r.URL.Path)
+	}))
+	defer legit.Close()
+	state := stateFor(legit, "control-secret")
+	evilAddress := strings.TrimPrefix(evil.URL, "http://")
+
+	// "user@host" makes the loopback address look like credentials, so the
+	// request would go to evilAddress carrying the bearer token.
+	for _, path := range []string{"@" + evilAddress + "/leak", "//" + evilAddress + "/leak", "v1/control/no-slash", "", ":80/x"} {
+		if err := Get(state, path, &struct{}{}); err == nil {
+			t.Errorf("Get(%q) must be refused", path)
+		}
+		if err := Post(state, path, nil, nil); err == nil {
+			t.Errorf("Post(%q) must be refused", path)
+		}
+	}
+	if len(evilRequests) != 0 {
+		t.Fatalf("the token reached another host: %q", evilRequests)
+	}
+	if len(legitRequests) != 0 {
+		t.Fatalf("a refused path must not be sent at all: %q", legitRequests)
+	}
+}
+
+func TestControlPathIsSentAsAPathNeverAsAQuery(t *testing.T) {
+	var gotPath, gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	if err := Get(stateFor(server, "t"), "/v1/control/x?admin=1#frag", &struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/control/x?admin=1#frag" || gotQuery != "" {
+		t.Fatalf("server saw path %q and query %q", gotPath, gotQuery)
+	}
+}
+
+func TestOfferIDsCannotAddPathSegmentsOrQueries(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.String())
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	state := stateFor(server, "t")
+	for _, id := range []string{"", " ", "a/b", "../shutdown", "x?y=1", "x#f", "x%2Fy", "@evil", strings.Repeat("a", 129)} {
+		if err := InboundAction(state, id, "accept"); err == nil {
+			t.Errorf("InboundAction accepted offer id %q", id)
+		}
+		if _, err := InboundText(state, id); err == nil {
+			t.Errorf("InboundText accepted offer id %q", id)
+		}
+	}
+	if len(requests) != 0 {
+		t.Fatalf("invalid ids reached the bridge: %q", requests)
+	}
+	if err := InboundAction(state, "0123456789abcdef-ABC_xyz", "reject"); err != nil {
+		t.Fatalf("a generated-style id must be accepted: %v", err)
+	}
+}
