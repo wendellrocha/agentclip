@@ -1029,9 +1029,13 @@ func acquireProfileStartLock(name string, wait, stale time.Duration) (func(), er
 		if !os.IsExist(err) {
 			return nil, fmt.Errorf("lock the start of Companion %q: %w", name, err)
 		}
+		// A leftover of a crashed start is taken over. Where the file cannot be
+		// removed (Windows keeps a file that a live process still has open), fall
+		// through to the deadline instead of retrying without end.
 		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > stale {
-			_ = os.Remove(path)
-			continue
+			if os.Remove(path) == nil {
+				continue
+			}
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("another start of Companion %q is in progress", name)
