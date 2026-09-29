@@ -162,9 +162,17 @@ func TestDashboardCSPForbidsInlineCodeAndThePageNeedsNone(t *testing.T) {
 			t.Errorf("CSP %q lacks %q", policy, want)
 		}
 	}
-	for _, forbidden := range []string{"unsafe-inline", "unsafe-eval", "data:  script", "*"} {
-		if strings.Contains(strings.ReplaceAll(policy, "img-src 'self' data:", ""), forbidden) {
-			t.Errorf("CSP %q contains %q", policy, forbidden)
+	// Each directive on its own: images may use data: URLs, nothing that runs may.
+	for _, directive := range strings.Split(policy, ";") {
+		fields := strings.Fields(directive)
+		if len(fields) == 0 || fields[0] == "img-src" {
+			continue
+		}
+		for _, source := range fields[1:] {
+			switch source {
+			case "'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'", "data:", "blob:", "filesystem:", "*", "http:", "https:":
+				t.Errorf("directive %q allows %s", strings.TrimSpace(directive), source)
+			}
 		}
 	}
 
