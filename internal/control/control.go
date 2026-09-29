@@ -13,6 +13,8 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -99,14 +101,21 @@ func InboundAction(state daemon.State, offerID, action string) error {
 	if action != "accept" && action != "reject" {
 		return errors.New("invalid inbound action")
 	}
+	if !validOfferID(offerID) {
+		return errors.New("invalid inbound offer id")
+	}
 	return Post(state, "/v1/control/inbound/"+offerID+"/"+action, nil, nil)
 }
 
 func InboundText(state daemon.State, offerID string) (companion.InboundFileContent, error) {
-	if !ValidLoopbackAddress(state.Address) || strings.TrimSpace(offerID) == "" {
+	if !ValidLoopbackAddress(state.Address) || !validOfferID(offerID) {
 		return companion.InboundFileContent{}, errors.New("received file is unavailable")
 	}
-	request, err := http.NewRequest(http.MethodGet, "http://"+state.Address+"/v1/control/inbound/"+offerID+"/file", nil)
+	target, err := endpoint(state, "/v1/control/inbound/"+offerID+"/file")
+	if err != nil {
+		return companion.InboundFileContent{}, err
+	}
+	request, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		return companion.InboundFileContent{}, err
 	}
@@ -128,10 +137,11 @@ func InboundText(state daemon.State, offerID string) (companion.InboundFileConte
 }
 
 func Post(state daemon.State, path string, payload []byte, output any) error {
-	if !ValidLoopbackAddress(state.Address) {
-		return errors.New("bridge state has an invalid loopback address")
+	target, err := endpoint(state, path)
+	if err != nil {
+		return err
 	}
-	request, err := http.NewRequest(http.MethodPost, "http://"+state.Address+path, bytes.NewReader(payload))
+	request, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -155,10 +165,11 @@ func Post(state daemon.State, path string, payload []byte, output any) error {
 }
 
 func Get(state daemon.State, path string, output any) error {
-	if !ValidLoopbackAddress(state.Address) {
-		return errors.New("bridge state has an invalid loopback address")
+	target, err := endpoint(state, path)
+	if err != nil {
+		return err
 	}
-	request, err := http.NewRequest(http.MethodGet, "http://"+state.Address+path, nil)
+	request, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
@@ -209,3 +220,24 @@ func ValidLoopbackAddress(address string) bool {
 func Shutdown(state daemon.State) error {
 	return Post(state, "/v1/control/shutdown", nil, nil)
 }
+
+// endpoint builds the URL of a control path on the bridge's loopback address.
+// The request carries the control token, so the URL is assembled from parts
+// instead of by concatenation: a path such as "@evil.example/x" would otherwise
+// turn the loopback address into credentials and send the token to another host.
+func endpoint(state daemon.State, path string) (string, error) {
+	if !ValidLoopbackAddress(state.Address) {
+		return "", errors.New("bridge state has an invalid loopback address")
+	}
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return "", errors.New("control path must start with a single slash")
+	}
+	target := url.URL{Scheme: "http", Host: state.Address, Path: path}
+	return target.String(), nil
+}
+
+var offerIDPattern = regexp.MustCompile(`^[0-9A-Za-z_-]{1,128}$`)
+
+// validOfferID accepts the identifiers the bridge generates. Anything else
+// could add path segments, a query or a fragment to the control request.
+func validOfferID(id string) bool { return offerIDPattern.MatchString(id) }
