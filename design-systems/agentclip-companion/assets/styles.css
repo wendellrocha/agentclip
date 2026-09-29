@@ -18,7 +18,7 @@ body {
   color: var(--text); font-family: var(--font); background: var(--canvas);
 }
 
-.app-shell { width: min(100%, 2090px); min-height: 100vh; margin: 0 auto; padding: clamp(24px, 3vw, 54px); display: flex; flex-direction: column; }
+.app-shell { width: min(100%, 2090px); min-height: 100vh; margin: 0 auto; padding: clamp(16px, 2vw, 28px); display: flex; flex-direction: column; }
 .nav { display: flex; justify-content: space-between; align-items: center; gap: 28px; padding-bottom: 30px; border-bottom: 1px solid #292e34; }
 .brand-lockup { display: flex; align-items: center; gap: 15px; min-width: 0; }
 .brand-mark { display: block; flex: 0 0 48px; width: 48px; height: 48px; }
