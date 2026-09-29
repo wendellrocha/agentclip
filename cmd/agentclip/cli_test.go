@@ -25,7 +25,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(directory)
 	binaryPath = filepath.Join(directory, "agentclip")
 	if runtime.GOOS == "windows" {
 		binaryPath += ".exe"
@@ -33,9 +32,13 @@ func TestMain(m *testing.M) {
 	// Built before the per-user directories are redirected, so the Go build
 	// cache stays where it is.
 	if output, err := exec.Command("go", "build", "-o", binaryPath, ".").CombinedOutput(); err != nil {
+		os.RemoveAll(directory)
 		panic("build agentclip: " + err.Error() + "\n" + string(output))
 	}
-	os.Exit(testenv.Main(m))
+	// os.Exit skips deferred calls, so clean up before it.
+	code := testenv.Main(m)
+	os.RemoveAll(directory)
+	os.Exit(code)
 }
 
 type cliResult struct {
