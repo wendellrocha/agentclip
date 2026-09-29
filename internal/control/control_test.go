@@ -264,6 +264,27 @@ func TestClientAgainstTheRealDaemon(t *testing.T) {
 	}
 }
 
+// The client sends a file as a path only, and the daemon arms it from that: what
+// FileItem produces must be accepted, and a path the daemon refuses must fail.
+func TestArmSnapshotSendsFilesAsAPathTheDaemonVerifies(t *testing.T) {
+	_, state := startDaemon(t)
+	path := filepath.Join(t.TempDir(), "report.csv")
+	if err := os.WriteFile(path, []byte("a,b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item, err := bridge.FileItem(path, "text/csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ArmSnapshot(state, []bridge.Item{item}); err != nil {
+		t.Fatalf("ArmSnapshot of a real file: %v", err)
+	}
+	item.File.Path = filepath.Join(filepath.Dir(path), "missing.csv")
+	if err := ArmSnapshot(state, []bridge.Item{item}); err == nil {
+		t.Fatal("ArmSnapshot of a file that does not exist must fail")
+	}
+}
+
 func TestClientIsRejectedWithAWrongControlToken(t *testing.T) {
 	_, state := startDaemon(t)
 	state.ControlToken = "not-the-token"
