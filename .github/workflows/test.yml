@@ -42,7 +42,7 @@ jobs:
         run: |
           total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
           echo "total coverage: ${total}%"
-          awk -v total="$total" -v floor=47 'BEGIN { exit (total + 0 < floor) }'
+          awk -v total="$total" -v floor=55 'BEGIN { exit (total + 0 < floor) }'
 
       - name: Upload coverage
         if: runner.os == 'Linux'
