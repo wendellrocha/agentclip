@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +76,8 @@ func TestProfileStartLockSerialisesStartsOfOneProfile(t *testing.T) {
 		t.Fatal("the waiting start never got the lock")
 	}
 
-	// It gives up rather than wait forever behind a start that never finishes.
+	// It gives up rather than wait forever behind a start that never finishes,
+	// even when the lock looks stale but cannot be removed.
 	held, err := acquireProfileStartLock("c", time.Second, time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -83,8 +86,36 @@ func TestProfileStartLockSerialisesStartsOfOneProfile(t *testing.T) {
 	if _, err := acquireProfileStartLock("c", 200*time.Millisecond, time.Minute); err == nil || !strings.Contains(err.Error(), "in progress") {
 		t.Fatalf("err = %v, want it to say another start is in progress", err)
 	}
-	// A lock older than the stale age is a crashed start and is taken over.
-	takeover, err := acquireProfileStartLock("c", time.Second, 0)
+	// stale=0 makes the held lock look stale. Where it can be removed (POSIX) it
+	// is taken over; where it cannot (Windows) the wait still ends.
+	done := make(chan struct{})
+	go func() {
+		if release, err := acquireProfileStartLock("c", 300*time.Millisecond, 0); err == nil {
+			release()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("acquiring a lock that looks stale but cannot be removed never returned")
+	}
+	// A lock left by a crashed start is taken over once it is older than the
+	// stale age. The file is written directly, with no open handle, as a crash
+	// leaves it (Windows would not let a live holder's file be removed).
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashed := filepath.Join(cache, "agentclip", "companions", "d.start.lock")
+	if err := os.WriteFile(crashed, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(crashed, old, old); err != nil {
+		t.Fatal(err)
+	}
+	takeover, err := acquireProfileStartLock("d", time.Second, time.Minute)
 	if err != nil {
 		t.Fatalf("a stale lock was not taken over: %v", err)
 	}
