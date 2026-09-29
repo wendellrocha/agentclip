@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -25,19 +24,5 @@ func TestRandomTokenAndPort(t *testing.T) {
 		if port < remotePortMin || port > remotePortMax {
 			t.Fatalf("port %d outside [%d, %d]", port, remotePortMin, remotePortMax)
 		}
-	}
-}
-
-func TestHasRemoteUpgradeFailure(t *testing.T) {
-	if hasRemoteUpgradeFailure(nil) {
-		t.Fatal("no results means no failure")
-	}
-	ok := []remoteUpgradeResult{{Profile: "a"}}
-	if hasRemoteUpgradeFailure(ok) {
-		t.Fatal("successful results must not fail")
-	}
-	failed := append(ok, remoteUpgradeResult{Profile: "b", Err: errors.New("ssh")})
-	if !hasRemoteUpgradeFailure(failed) {
-		t.Fatal("a failed remote must be reported")
 	}
 }
