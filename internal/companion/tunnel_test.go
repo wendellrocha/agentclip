@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,31 +20,56 @@ func fastTunnel(t *testing.T, min, max, stable time.Duration) {
 	tunnelTiming.min, tunnelTiming.max, tunnelTiming.stable = min, max, stable
 }
 
-// fakeSSH installs an `ssh` that exits with 255 for its first `failures` runs,
-// then stays up until it is killed, and counts how often it was started.
-func fakeSSH(t *testing.T, failures int) (starts func() int) {
+// fakeSSH puts a fake `ssh` on PATH: the test binary itself, copied under that
+// name (see TestMain). It exits with 255 for its first `failures` starts and, when
+// dropAt is set, drops at that start after dropAfter; every start is counted and
+// timestamped in the returned directory.
+type fakeTunnel struct{ dir string }
+
+func fakeSSH(t *testing.T, failures, dropAt int, dropAfter time.Duration) fakeTunnel {
 	t.Helper()
-	if os.PathSeparator == '\\' {
-		t.Skip("the fake ssh is a POSIX shell script")
-	}
-	bin, counter := t.TempDir(), filepath.Join(t.TempDir(), "starts")
-	script := "#!/bin/sh\nn=$(cat '" + counter + "' 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > '" + counter + "'\n" +
-		"if [ $n -le " + itoa(failures) + " ]; then exit 255; fi\nexec /bin/sleep 30\n"
-	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
+	self, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
-	return func() int {
-		data, _ := os.ReadFile(counter)
-		n := 0
-		for _, c := range strings.TrimSpace(string(data)) {
-			n = n*10 + int(c-'0')
-		}
-		return n
+	name := "ssh"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
 	}
+	bin, dir := t.TempDir(), t.TempDir()
+	data, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, name), data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(fakeSSHEnv, "1")
+	t.Setenv("AGENTCLIP_TEST_FAKE_SSH_DIR", dir)
+	t.Setenv("AGENTCLIP_TEST_FAKE_SSH_FAILURES", strconv.Itoa(failures))
+	t.Setenv("AGENTCLIP_TEST_FAKE_SSH_DROP_AT", strconv.Itoa(dropAt))
+	t.Setenv("AGENTCLIP_TEST_FAKE_SSH_DROP_AFTER", dropAfter.String())
+	return fakeTunnel{dir: dir}
 }
 
-func itoa(n int) string { return string(rune('0'+n/10)) + string(rune('0'+n%10)) }
+func (f fakeTunnel) starts() int {
+	data, _ := os.ReadFile(filepath.Join(f.dir, "starts"))
+	n, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	return n
+}
+
+// stamps returns the start times, in order.
+func (f fakeTunnel) stamps() []time.Time {
+	data, _ := os.ReadFile(filepath.Join(f.dir, "stamps"))
+	var times []time.Time
+	for _, field := range strings.Fields(string(data)) {
+		if nanos, err := strconv.ParseInt(field, 10, 64); err == nil {
+			times = append(times, time.Unix(0, nanos))
+		}
+	}
+	return times
+}
 
 type statusLog struct {
 	mu       sync.Mutex
@@ -80,7 +107,8 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 // each step, and cancelling ends the loop and the child process.
 func TestTunnelReconnectsAfterExitsReportsEachStateAndStopsOnCancel(t *testing.T) {
 	fastTunnel(t, 5*time.Millisecond, 20*time.Millisecond, time.Hour)
-	starts := fakeSSH(t, 2)
+	ssh := fakeSSH(t, 2, 0, 0)
+	starts := ssh.starts
 	log := &statusLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -123,39 +151,27 @@ func TestTunnelReconnectsAfterExitsReportsEachStateAndStopsOnCancel(t *testing.T
 // over once a tunnel has stayed up: a healthy tunnel that drops after hours
 // must not inherit the wait earned by failures long before.
 func TestTunnelWaitGrowsToItsCapAndStartsOverAfterAStableTunnel(t *testing.T) {
-	if os.PathSeparator == '\\' {
-		t.Skip("the fake ssh is a POSIX shell script")
-	}
 	fastTunnel(t, 50*time.Millisecond, 400*time.Millisecond, 300*time.Millisecond)
-	bin := t.TempDir()
-	stamps := filepath.Join(t.TempDir(), "stamps")
-	// Fails 5 times fast, stays up past the stable threshold, drops once, then stays.
-	script := "#!/bin/sh\nn=$(cat '" + stamps + ".n' 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > '" + stamps + ".n'\n" +
-		"/bin/date +%s%N >> '" + stamps + "'\n" +
-		"if [ $n -le 5 ]; then exit 255; fi\nif [ $n -eq 6 ]; then /bin/sleep 0.8; exit 255; fi\nexec /bin/sleep 30\n"
-	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
+	// Fails 5 times at once, then stays up for 0.8s (past the stable threshold),
+	// drops once, and stays up again.
+	ssh := fakeSSH(t, 5, 6, 800*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = RunTunnel(ctx, profileForTunnel(), 45678) }()
-	waitFor(t, "seven starts", func() bool {
-		data, _ := os.ReadFile(stamps)
-		return len(strings.Fields(string(data))) >= 7
+	done := make(chan struct{})
+	go func() {
+		_ = RunTunnel(ctx, profileForTunnel(), 45678)
+		close(done)
+	}()
+	// Registered after fastTunnel, so it runs first: the loop and its child are
+	// gone before the timing is restored and the fake ssh is removed.
+	t.Cleanup(func() {
+		cancel()
+		<-done
 	})
-	data, _ := os.ReadFile(stamps)
-	var times []int64
-	for _, field := range strings.Fields(string(data)) {
-		var n int64
-		for _, c := range field {
-			n = n*10 + int64(c-'0')
-		}
-		times = append(times, n)
-	}
-	gap := func(i int) time.Duration { return time.Duration(times[i+1] - times[i]) }
+	waitFor(t, "seven starts", func() bool { return len(ssh.stamps()) >= 7 })
+	times := ssh.stamps()
+	gap := func(i int) time.Duration { return times[i+1].Sub(times[i]) }
 	// Waits after quick exits: 50, 100, 200, 400 (the cap). The gaps also hold
-	// the script's own start-up, so only lower bounds and the cap are checked.
+	// the process start-up, so only lower bounds and the cap are checked.
 	if gap(1) < 90*time.Millisecond || gap(2) < 190*time.Millisecond || gap(3) < 390*time.Millisecond {
 		t.Errorf("the wait did not grow: gaps %v %v %v %v", gap(0), gap(1), gap(2), gap(3))
 	}
