@@ -1,14 +1,20 @@
-package main
+package control
 
 import (
-	"errors"
+	"bytes"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/wendellrocha/agentclip/internal/bridge"
 	"github.com/wendellrocha/agentclip/internal/daemon"
+	"github.com/wendellrocha/agentclip/internal/release"
+	"github.com/wendellrocha/agentclip/internal/testenv"
 )
 
 func stateFor(server *httptest.Server, token string) daemon.State {
@@ -29,41 +35,18 @@ func TestValidLoopbackAddressOnlyAcceptsIPv4Loopback(t *testing.T) {
 		"127.0.0.1":       false,
 		"":                false,
 	} {
-		if got := validLoopbackAddress(address); got != want {
-			t.Errorf("validLoopbackAddress(%q) = %v, want %v", address, got, want)
+		if got := ValidLoopbackAddress(address); got != want {
+			t.Errorf("ValidLoopbackAddress(%q) = %v, want %v", address, got, want)
 		}
 	}
 }
 
 func TestStatePort(t *testing.T) {
-	if got := statePort(daemon.State{Address: "127.0.0.1:4321"}); got != 4321 {
-		t.Fatalf("statePort = %d, want 4321", got)
+	if got := Port(daemon.State{Address: "127.0.0.1:4321"}); got != 4321 {
+		t.Fatalf("Port = %d, want 4321", got)
 	}
-	if got := statePort(daemon.State{Address: "garbage"}); got != 0 {
-		t.Fatalf("statePort of invalid address = %d, want 0", got)
-	}
-}
-
-func TestRandomTokenAndPort(t *testing.T) {
-	first, err := randomToken(32)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := randomToken(32)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first == second || len(first) < 43 {
-		t.Fatalf("tokens must be unique and long enough: %q %q", first, second)
-	}
-	for i := 0; i < 200; i++ {
-		port, err := randomPort()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if port < remotePortMin || port > remotePortMax {
-			t.Fatalf("port %d outside [%d, %d]", port, remotePortMin, remotePortMax)
-		}
+	if got := Port(daemon.State{Address: "garbage"}); got != 0 {
+		t.Fatalf("Port of invalid address = %d, want 0", got)
 	}
 }
 
@@ -80,16 +63,16 @@ func TestControlClientSendsBearerTokenAndDecodesResponses(t *testing.T) {
 	state := stateFor(server, "control-secret")
 
 	var got struct{ OK bool }
-	if err := controlGet(state, "/v1/control/x", &got); err != nil || !got.OK {
-		t.Fatalf("controlGet = %+v, %v", got, err)
+	if err := Get(state, "/v1/control/x", &got); err != nil || !got.OK {
+		t.Fatalf("Get = %+v, %v", got, err)
 	}
 	if gotAuth != "Bearer control-secret" {
 		t.Fatalf("Authorization = %q", gotAuth)
 	}
 
 	got.OK = false
-	if err := controlPost(state, "/v1/control/x", []byte(`{"a":1}`), &got); err != nil || !got.OK {
-		t.Fatalf("controlPost = %+v, %v", got, err)
+	if err := Post(state, "/v1/control/x", []byte(`{"a":1}`), &got); err != nil || !got.OK {
+		t.Fatalf("Post = %+v, %v", got, err)
 	}
 	if gotBody != `{"a":1}` || gotType != "application/json" {
 		t.Fatalf("body = %q, content type = %q", gotBody, gotType)
@@ -104,8 +87,8 @@ func TestControlClientReportsHTTPErrors(t *testing.T) {
 	state := stateFor(server, "t")
 
 	for name, err := range map[string]error{
-		"get":  controlGet(state, "/v1/control/x", &struct{}{}),
-		"post": controlPost(state, "/v1/control/x", nil, nil),
+		"get":  Get(state, "/v1/control/x", &struct{}{}),
+		"post": Post(state, "/v1/control/x", nil, nil),
 	} {
 		if err == nil || !strings.Contains(err.Error(), "HTTP 409") || !strings.Contains(err.Error(), "nope") {
 			t.Errorf("%s error = %v, want HTTP 409 with body", name, err)
@@ -120,17 +103,17 @@ func TestControlClientRefusesNonLoopbackAddresses(t *testing.T) {
 	// "localhost" resolves to the test server but is not the accepted literal.
 	state := daemon.State{Address: strings.Replace(strings.TrimPrefix(server.URL, "http://"), "127.0.0.1", "localhost", 1), ControlToken: "secret"}
 
-	if err := controlGet(state, "/", &struct{}{}); err == nil {
-		t.Error("controlGet must refuse a non-loopback address")
+	if err := Get(state, "/", &struct{}{}); err == nil {
+		t.Error("Get must refuse a non-loopback address")
 	}
-	if err := controlPost(state, "/", nil, nil); err == nil {
-		t.Error("controlPost must refuse a non-loopback address")
+	if err := Post(state, "/", nil, nil); err == nil {
+		t.Error("Post must refuse a non-loopback address")
 	}
-	if _, err := controlInboundText(state, "offer"); err == nil {
-		t.Error("controlInboundText must refuse a non-loopback address")
+	if _, err := InboundText(state, "offer"); err == nil {
+		t.Error("InboundText must refuse a non-loopback address")
 	}
-	if bridgeHealthy(state) {
-		t.Error("bridgeHealthy must refuse a non-loopback address")
+	if Healthy(state) {
+		t.Error("Healthy must refuse a non-loopback address")
 	}
 	if contacted {
 		t.Fatal("the control token must never reach a non-loopback address")
@@ -146,13 +129,13 @@ func TestControlInboundActionValidatesTheAction(t *testing.T) {
 	defer server.Close()
 	state := stateFor(server, "t")
 
-	if err := controlInboundAction(state, "offer-1", "delete"); err == nil {
+	if err := InboundAction(state, "offer-1", "delete"); err == nil {
 		t.Fatal("unknown action must be rejected before any request")
 	}
 	if path != "" {
 		t.Fatalf("unexpected request to %q", path)
 	}
-	if err := controlInboundAction(state, "offer-1", "accept"); err != nil || path != "/v1/control/inbound/offer-1/accept" {
+	if err := InboundAction(state, "offer-1", "accept"); err != nil || path != "/v1/control/inbound/offer-1/accept" {
 		t.Fatalf("accept: err=%v path=%q", err, path)
 	}
 }
@@ -175,7 +158,7 @@ func TestControlInboundTextParsesFilenameAndPreviewHeader(t *testing.T) {
 	defer server.Close()
 	state := stateFor(server, "t")
 
-	content, err := controlInboundText(state, "ok")
+	content, err := InboundText(state, "ok")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +168,7 @@ func TestControlInboundTextParsesFilenameAndPreviewHeader(t *testing.T) {
 		t.Fatalf("content = %+v %q", content, data)
 	}
 	for _, id := range []string{"missing", "nameless", " "} {
-		if _, err := controlInboundText(state, id); err == nil {
+		if _, err := InboundText(state, id); err == nil {
 			t.Errorf("offer %q must be unavailable", id)
 		}
 	}
@@ -196,7 +179,7 @@ func TestCompanionInboundStatusFallsBackToEmptyOnError(t *testing.T) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	status := companionInboundStatus(stateFor(server, "t"))
+	status := InboundStatus(stateFor(server, "t"))
 	if len(status.Offers) != 0 || len(status.Received) != 0 {
 		t.Fatalf("status = %+v, want empty", status)
 	}
@@ -211,25 +194,97 @@ func TestBridgeHealthy(t *testing.T) {
 	}))
 	defer server.Close()
 	state := stateFor(server, "t")
-	if !bridgeHealthy(state) {
+	if !Healthy(state) {
 		t.Fatal("bridge must be healthy")
 	}
 	healthy = false
-	if bridgeHealthy(state) {
+	if Healthy(state) {
 		t.Fatal("bridge must be unhealthy on 503")
 	}
 }
 
-func TestHasRemoteUpgradeFailure(t *testing.T) {
-	if hasRemoteUpgradeFailure(nil) {
-		t.Fatal("no results means no failure")
+// The tests below run the client against the real daemon, so a payload the
+// client sends is accepted by the handler that receives it.
+
+func startDaemon(t *testing.T) (*daemon.Daemon, daemon.State) {
+	t.Helper()
+	testenv.IsolateUserDirs(t)
+	d, err := daemon.Start(nil, "control-secret")
+	if err != nil {
+		t.Fatal(err)
 	}
-	ok := []remoteUpgradeResult{{Profile: "a"}}
-	if hasRemoteUpgradeFailure(ok) {
-		t.Fatal("successful results must not fail")
+	t.Cleanup(func() { _ = d.Close() })
+	return d, d.State
+}
+
+func tinyPNG(t *testing.T) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, image.NewRGBA(image.Rect(0, 0, 4, 3))); err != nil {
+		t.Fatal(err)
 	}
-	failed := append(ok, remoteUpgradeResult{Profile: "b", Err: errors.New("ssh")})
-	if !hasRemoteUpgradeFailure(failed) {
-		t.Fatal("a failed remote must be reported")
+	return buffer.Bytes()
+}
+
+func TestClientAgainstTheRealDaemon(t *testing.T) {
+	_, state := startDaemon(t)
+
+	if !Healthy(state) {
+		t.Fatal("a running daemon must be healthy")
+	}
+	if Port(state) == 0 {
+		t.Fatalf("Port(%q) = 0", state.Address)
+	}
+
+	armed, err := Arm(state, daemon.Image{PNG: tinyPNG(t), Width: 4, Height: 3})
+	if err != nil || armed.ID == "" || armed.ExpiresAt.IsZero() {
+		t.Fatalf("Arm = %+v, %v", armed, err)
+	}
+
+	session, err := Session(state)
+	if err != nil || session.ID == "" || session.Token == "" {
+		t.Fatalf("Session = %+v, %v", session, err)
+	}
+
+	items := []bridge.Item{{ID: "text-1", Kind: bridge.ItemText, MIMEType: "text/plain", Name: "note.txt", Data: []byte("hello")}}
+	if err := ArmSnapshot(state, items); err != nil {
+		t.Fatalf("ArmSnapshot: %v", err)
+	}
+
+	if err := PublishReleaseStatus(state, release.Status{CurrentVersion: "v0.7.1", LatestVersion: "v0.8.0", UpdateAvailable: true}); err != nil {
+		t.Fatalf("PublishReleaseStatus: %v", err)
+	}
+	if err := PublishReleaseStatus(state, release.Status{}); err == nil {
+		t.Fatal("the daemon must refuse a release status without a current version")
+	}
+
+	status := InboundStatus(state)
+	if len(status.Offers) != 0 || len(status.Received) != 0 {
+		t.Fatalf("a fresh daemon has no inbound files: %+v", status)
+	}
+}
+
+func TestClientIsRejectedWithAWrongControlToken(t *testing.T) {
+	_, state := startDaemon(t)
+	state.ControlToken = "not-the-token"
+	if _, err := Session(state); err == nil || !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("Session with a wrong token = %v, want HTTP 401", err)
+	}
+	if err := ArmSnapshot(state, nil); err == nil {
+		t.Fatal("ArmSnapshot with a wrong token must fail")
+	}
+}
+
+func TestShutdownStopsTheDaemon(t *testing.T) {
+	_, state := startDaemon(t)
+	if err := Shutdown(state); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for Healthy(state) {
+		if time.Now().After(deadline) {
+			t.Fatal("the daemon is still healthy after Shutdown")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
