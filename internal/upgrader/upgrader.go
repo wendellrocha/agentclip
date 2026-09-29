@@ -49,19 +49,29 @@ func (s StagedBinary) Cleanup() {
 	}
 }
 
-// Prepare downloads the platform archive, checks it against checksums.txt and,
-// for releases that have one, against the repository's build attestation. The
-// extracted binary is staged in the target directory, which verifies that
-// the eventual atomic replacement has the needed local write permission.
-func Prepare(ctx context.Context, options Options) (StagedBinary, error) {
+// Fetched is a release binary that has been downloaded and verified. Path is
+// valid until Cleanup is called.
+type Fetched struct {
+	Path string
+	// Notice explains a verification step that was not performed, for the
+	// caller to show the user.
+	Notice string
+	dir    string
+}
+
+func (f Fetched) Cleanup() {
+	if f.dir != "" {
+		_ = os.RemoveAll(f.dir)
+	}
+}
+
+// Fetch downloads the platform archive, checks it against checksums.txt and,
+// for releases that have one, against the repository's build attestation, and
+// extracts the binary. It never installs anything; the caller decides where the
+// verified binary goes, on this machine or on another.
+func Fetch(ctx context.Context, options Options) (Fetched, error) {
 	if options.Version == "" {
-		return StagedBinary{}, errors.New("release version is required")
-	}
-	if options.Executable == "" {
-		return StagedBinary{}, errors.New("executable path is required")
-	}
-	if !filepath.IsAbs(options.Executable) {
-		return StagedBinary{}, errors.New("executable path must be absolute")
+		return Fetched{}, errors.New("release version is required")
 	}
 	goos, goarch := options.GOOS, options.GOARCH
 	if goos == "" {
@@ -72,7 +82,7 @@ func Prepare(ctx context.Context, options Options) (StagedBinary, error) {
 	}
 	extension, archiveFormat, err := platform(goos, goarch)
 	if err != nil {
-		return StagedBinary{}, err
+		return Fetched{}, err
 	}
 	repository := options.Repository
 	if repository == "" {
@@ -86,31 +96,34 @@ func Prepare(ctx context.Context, options Options) (StagedBinary, error) {
 	}
 	temporaryDirectory, err := os.MkdirTemp("", "agentclip-upgrade-")
 	if err != nil {
-		return StagedBinary{}, fmt.Errorf("create upgrade temporary directory: %w", err)
+		return Fetched{}, fmt.Errorf("create upgrade temporary directory: %w", err)
 	}
-	defer os.RemoveAll(temporaryDirectory)
+	fail := func(err error) (Fetched, error) {
+		_ = os.RemoveAll(temporaryDirectory)
+		return Fetched{}, err
+	}
 	archivePath := filepath.Join(temporaryDirectory, asset)
 	if err := download(ctx, client, baseURL+"/"+asset, archivePath); err != nil {
-		return StagedBinary{}, fmt.Errorf("download release asset: %w", err)
+		return fail(fmt.Errorf("download release asset: %w", err))
 	}
 	checksumsPath := filepath.Join(temporaryDirectory, "checksums.txt")
 	if err := download(ctx, client, baseURL+"/checksums.txt", checksumsPath); err != nil {
-		return StagedBinary{}, fmt.Errorf("download release checksums: %w", err)
+		return fail(fmt.Errorf("download release checksums: %w", err))
 	}
 	expected, err := checksumFor(checksumsPath, asset)
 	if err != nil {
-		return StagedBinary{}, err
+		return fail(err)
 	}
 	actual, err := checksumFile(archivePath)
 	if err != nil {
-		return StagedBinary{}, err
+		return fail(err)
 	}
 	if !strings.EqualFold(expected, actual) {
-		return StagedBinary{}, errors.New("release checksum does not match checksums.txt")
+		return fail(errors.New("release checksum does not match checksums.txt"))
 	}
 	notice, err := checkAttestation(ctx, client, options, repository, actual)
 	if err != nil {
-		return StagedBinary{}, err
+		return fail(err)
 	}
 	binaryName := "agentclip" + extension
 	archiveBinary := filepath.ToSlash(filepath.Join(strings.TrimSuffix(asset, "."+archiveFormat), binaryName))
@@ -121,7 +134,30 @@ func Prepare(ctx context.Context, options Options) (StagedBinary, error) {
 		err = extractZip(archivePath, archiveBinary, preparedPath)
 	}
 	if err != nil {
+		return fail(err)
+	}
+	return Fetched{Path: preparedPath, Notice: notice, dir: temporaryDirectory}, nil
+}
+
+// Prepare fetches and verifies the release binary for this machine and stages
+// it in the target directory, which verifies that the eventual atomic
+// replacement has the needed local write permission.
+func Prepare(ctx context.Context, options Options) (StagedBinary, error) {
+	if options.Executable == "" {
+		return StagedBinary{}, errors.New("executable path is required")
+	}
+	if !filepath.IsAbs(options.Executable) {
+		return StagedBinary{}, errors.New("executable path must be absolute")
+	}
+	fetched, err := Fetch(ctx, options)
+	if err != nil {
 		return StagedBinary{}, err
+	}
+	defer fetched.Cleanup()
+	preparedPath, notice := fetched.Path, fetched.Notice
+	goos := options.GOOS
+	if goos == "" {
+		goos = runtime.GOOS
 	}
 	target := options.Executable
 	directory := filepath.Dir(target)

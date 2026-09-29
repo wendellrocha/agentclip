@@ -266,7 +266,7 @@ func runSetup(arguments []string) error {
 		EnsureIdentity: remote.EnsureSetupSSHIdentity,
 		ReleaseTag:     setup.ReleaseTag,
 		Install: func(destination, identityFile, tag string) error {
-			return remote.InstallCommandWithIdentity(destination, identityFile, tag).Run()
+			return remote.InstallVerified(context.Background(), destination, identityFile, tag, os.Stderr)
 		},
 		CompanionRunning: func(name string) bool {
 			state, err := companion.LoadRuntime(name)
@@ -496,7 +496,7 @@ func runUpgrade(arguments []string) error {
 		Profiles:         companion.ListProfiles,
 		ActiveCompanions: activeCompanions,
 		InstallRemote: func(profile companion.Profile, tag string) error {
-			return remote.InstallCommandWithIdentity(profile.Destination, profile.SSHIdentityFile, tag).Run()
+			return remote.InstallVerified(context.Background(), profile.Destination, profile.SSHIdentityFile, tag, os.Stderr)
 		},
 		StopCompanions:           stopCompanions,
 		RestartCompanions:        restartCompanions,

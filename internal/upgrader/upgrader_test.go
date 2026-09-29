@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -96,4 +97,53 @@ func tarFixture(t *testing.T, name string, contents []byte) []byte {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
+}
+
+// Fetch verifies and extracts a release binary for any platform without
+// installing it, which is what lets a server be given a binary this machine
+// has checked instead of running a script there.
+func TestFetchVerifiesAForeignPlatformBinaryAndInstallsNothing(t *testing.T) {
+	const version = "v1.2.3"
+	const asset = "agentclip_v1.2.3_darwin_arm64.tar.gz"
+	archive := tarFixture(t, "agentclip_v1.2.3_darwin_arm64/agentclip", []byte("mac executable"))
+	sum := sha256.Sum256(archive)
+	digest := hex.EncodeToString(sum[:])
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch filepath.Base(request.URL.Path) {
+		case asset:
+			_, _ = w.Write(archive)
+		case "checksums.txt":
+			_, _ = w.Write([]byte(digest + "  " + asset + "\n"))
+		case "sha256:" + digest:
+			_, _ = w.Write(attestationBody(t, digest, "example/agentclip", releaseWorkflowPath, "refs/tags/"+version))
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	fetched, err := Fetch(context.Background(), Options{Version: version, GOOS: "darwin", GOARCH: "arm64", Repository: "example/agentclip", Client: rewriteClient(server), APIBaseURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(fetched.Path)
+	if err != nil || string(payload) != "mac executable" {
+		t.Fatalf("fetched payload = %q, %v", payload, err)
+	}
+	fetched.Cleanup()
+	if _, err := os.Stat(fetched.Path); !os.IsNotExist(err) {
+		t.Fatalf("Cleanup left %s behind (%v)", fetched.Path, err)
+	}
+
+	// A checksum that does not match is refused, and nothing is left behind.
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if filepath.Base(request.URL.Path) == "checksums.txt" {
+			_, _ = w.Write([]byte(strings.Repeat("0", 64) + "  " + asset + "\n"))
+			return
+		}
+		_, _ = w.Write(archive)
+	}))
+	defer bad.Close()
+	if _, err := Fetch(context.Background(), Options{Version: version, GOOS: "darwin", GOARCH: "arm64", Repository: "example/agentclip", Client: rewriteClient(bad)}); err == nil {
+		t.Fatal("a binary that does not match checksums.txt was accepted")
+	}
 }
