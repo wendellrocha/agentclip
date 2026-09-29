@@ -8,6 +8,9 @@ import (
 	"testing"
 )
 
+// psQuote returns s as a PowerShell single-quoted literal.
+func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
 // powershell runs a script in a single-threaded apartment, which the Windows
 // clipboard APIs require.
 func powershell(t *testing.T, script string, arguments ...string) {
@@ -25,20 +28,20 @@ func nativeSetText(t *testing.T, text string) {
 	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
-	powershell(t, `Set-Clipboard -Value ([System.IO.File]::ReadAllText('`+path+`', [System.Text.Encoding]::UTF8))`)
+	powershell(t, `Set-Clipboard -Value ([System.IO.File]::ReadAllText(`+psQuote(path)+`, [System.Text.Encoding]::UTF8))`)
 }
 
 func nativeSetImage(t *testing.T, pngPath string) {
 	t.Helper()
 	powershell(t, `Add-Type -AssemblyName System.Windows.Forms, System.Drawing; `+
-		`[System.Windows.Forms.Clipboard]::SetImage([System.Drawing.Image]::FromFile('`+pngPath+`'))`)
+		`[System.Windows.Forms.Clipboard]::SetImage([System.Drawing.Image]::FromFile(`+psQuote(pngPath)+`))`)
 }
 
 func nativeSetFiles(t *testing.T, paths ...string) {
 	t.Helper()
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
-		quoted[i] = "'" + strings.ReplaceAll(path, "'", "''") + "'"
+		quoted[i] = psQuote(path)
 	}
 	powershell(t, `Set-Clipboard -Path `+strings.Join(quoted, ","))
 }
