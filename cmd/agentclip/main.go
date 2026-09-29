@@ -366,8 +366,11 @@ func pairProfileWithIdentity(name, destination string, remotePort int, agent str
 }
 
 func runCompanion(arguments []string) error {
+	if len(arguments) > 0 && arguments[0] == "autostart" {
+		return runAutostart(arguments[1:], os.Stdout)
+	}
 	if len(arguments) < 2 || len(arguments) > 4 {
-		return errors.New("usage: agentclip companion <start|stop|status|open|view|run|inbox> <profile> [--verbose] | agentclip companion <accept|reject> <profile> <offer-id>")
+		return errors.New("usage: agentclip companion <start|stop|status|open|view|run|inbox> <profile> [--verbose] | agentclip companion <accept|reject> <profile> <offer-id> | agentclip companion autostart <enable|disable|status> <profile>")
 	}
 	verbose := false
 	if len(arguments) == 3 && arguments[2] == "--verbose" && (arguments[0] == "start" || arguments[0] == "run" || arguments[0] == "serve") {
@@ -698,6 +701,14 @@ func runCompanionService(name string, announce bool) error {
 	profile, err := companion.LoadProfile(name)
 	if err != nil {
 		return err
+	}
+	// A login service must not start a second Companion for a profile that is
+	// already running: they would fight over the state file and the tunnel.
+	if state, err := companion.LoadRuntime(name); err == nil && companion.RuntimeHealthy(state) && state.PID != os.Getpid() {
+		if announce {
+			return fmt.Errorf("Companion %q is already running; use `agentclip companion open %s`", name, name)
+		}
+		return nil
 	}
 	logger, err := companion.NewLogger(name)
 	if err != nil {

@@ -89,6 +89,7 @@ CLI do harness, o binário remoto, o perfil local ou o Companion em execução.
 ```text
 agentclip companion <start|stop|status|open|view|run|inbox> <profile>
 agentclip companion <accept|reject> <profile> <offer-id>
+agentclip companion autostart <enable|disable|status> <profile>
 ```
 
 Gerencia a parte local persistente do AgentClip.
@@ -105,6 +106,18 @@ Gerencia a parte local persistente do AgentClip.
   servidor e os recebimentos recentes.
 - `accept` e `reject`: aprovam ou recusam uma oferta pendente sem abrir o
   navegador. O ID aparece em `inbox`, `status` ou na página web.
+- `autostart enable`: faz o Companion do perfil subir quando você entra na
+  sessão, com o que cada sistema já tem: um LaunchAgent em
+  `~/Library/LaunchAgents` no macOS, uma unidade de usuário do systemd em
+  `~/.config/systemd/user` no Linux e uma tarefa `ONLOGON` do Agendador de
+  Tarefas no Windows. O serviço executa `agentclip companion serve <perfil>` e
+  reinicia o processo se ele falhar. Ativar de novo recarrega a definição, e o
+  perfil precisa existir. O serviço não abre um segundo Companion se já houver
+  um rodando para o perfil.
+- `autostart disable`: para o serviço e remove os arquivos que o `enable`
+  criou; um Companion que já esteja rodando continua rodando. Pode ser repetido
+  sem erro.
+- `autostart status`: diz se o perfil sobe no login.
 
 ### `upgrade`
 
@@ -276,12 +289,14 @@ manualmente.
 
 ## Após reinicializações
 
-Os perfis persistem, mas AgentClip não registra autostart no sistema. Depois de
-reiniciar o host, inicie explicitamente o perfil desejado:
+Os perfis persistem, mas por padrão o AgentClip não registra autostart no
+sistema. Depois de reiniciar o host, inicie explicitamente o perfil desejado:
 
 ```bash
 agentclip companion start m2
 ```
+
+Para dispensar isso, ative `agentclip companion autostart enable m2`.
 
 Se apenas o servidor remoto reiniciar, um Companion que permaneça vivo no host
 tentará restabelecer automaticamente o mesmo túnel, com espera progressiva de
