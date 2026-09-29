@@ -94,7 +94,7 @@ func (b *Bridge) inboundOffersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	offer, err := b.CreateInboundOffer(session.ID, request.Name, request.Size, request.SHA256)
 	if err != nil {
-		b.err(w, http.StatusBadRequest, "INVALID_OFFER", err.Error())
+		b.err(w, http.StatusBadRequest, "INVALID_OFFER", Reason(err))
 		return
 	}
 	b.json(w, offer)
@@ -134,7 +134,7 @@ func (b *Bridge) inboundOfferHandler(w http.ResponseWriter, r *http.Request) {
 			} else if errors.Is(err, errApprovalRequired) {
 				status = http.StatusConflict
 			}
-			b.err(w, status, "INBOUND_DELIVERY_REJECTED", err.Error())
+			b.err(w, status, "INBOUND_DELIVERY_REJECTED", Reason(err))
 			return
 		}
 		b.json(w, offer)
@@ -144,27 +144,27 @@ func (b *Bridge) inboundOfferHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	errOfferNotFound    = errors.New("inbound offer not found")
-	errApprovalRequired = errors.New("local approval is required before upload")
+	errOfferNotFound    = public("inbound offer not found")
+	errApprovalRequired = public("local approval is required before upload")
 	// errInboundVerification marks size or hash mismatches, which are safe to
 	// report to the remote agent. Any other failure may embed host paths.
-	errInboundVerification = errors.New("inbound upload hash verification failed")
-	errInboundStorage      = errors.New("inbound delivery failed on the host")
+	errInboundVerification = public("inbound upload hash verification failed")
+	errInboundStorage      = public("inbound delivery failed on the host")
 )
 
 func (b *Bridge) CreateInboundOffer(sessionID, name string, size int64, checksum string) (InboundOffer, error) {
 	if !validInboundName(name) || size < 0 || size > MaxFileBytes || !validChecksum(checksum) {
-		return InboundOffer{}, errors.New("inbound offer metadata is invalid")
+		return InboundOffer{}, public("inbound offer metadata is invalid")
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pruneInboundLocked(b.now())
 	if session := b.sessions[sessionID]; session == nil || !session.HasUploadToken || !session.Persistent || session.Revoked {
-		return InboundOffer{}, errors.New("inbound upload session is unavailable")
+		return InboundOffer{}, public("inbound upload session is unavailable")
 	}
 	profile := inboundProfile(sessionID)
 	if b.openInboundOffersLocked(profile) >= MaxOpenInboundOffers {
-		return InboundOffer{}, errors.New("too many open inbound offers")
+		return InboundOffer{}, public("too many open inbound offers")
 	}
 	now := b.now()
 	offer := &inboundOffer{InboundOffer: InboundOffer{ID: randomID(), Name: filepath.Base(name), Size: size, SHA256: strings.ToLower(checksum), State: InboundPending, CreatedAt: now, ExpiresAt: now.Add(InboundOfferTTL)}, profile: profile}
@@ -201,7 +201,7 @@ func (b *Bridge) setInboundOfferState(offerID string, target InboundState) (Inbo
 		return InboundOffer{}, errOfferNotFound
 	}
 	if offer.State != InboundPending {
-		return InboundOffer{}, fmt.Errorf("inbound offer is %s", offer.State)
+		return InboundOffer{}, public("inbound offer is " + string(offer.State))
 	}
 	offer.State = target
 	b.logLocked("inbound offer %s: id=%s", target, offer.ID)
@@ -257,17 +257,17 @@ func (b *Bridge) openInboundFile(offerID string, textOnly bool) (*os.File, Inbou
 	offer := b.inbound[offerID]
 	if offer == nil || offer.State != InboundDelivered || (textOnly && !inboundTextName(offer.Name)) {
 		b.mu.Unlock()
-		return nil, InboundOffer{}, errors.New("received text file is unavailable")
+		return nil, InboundOffer{}, public("received text file is unavailable")
 	}
 	path, metadata := offer.path, offer.InboundOffer
 	b.mu.Unlock()
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() != metadata.Size {
-		return nil, InboundOffer{}, errors.New("received text file is unavailable")
+		return nil, InboundOffer{}, public("received text file is unavailable")
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, InboundOffer{}, errors.New("received text file is unavailable")
+		return nil, InboundOffer{}, public("received text file is unavailable")
 	}
 	return file, metadata, nil
 }
@@ -303,11 +303,11 @@ func (b *Bridge) DeliverInboundOffer(sessionID, offerID string, body io.Reader, 
 		if state == InboundPending {
 			return InboundOffer{}, errApprovalRequired
 		}
-		return InboundOffer{}, fmt.Errorf("inbound offer is %s", state)
+		return InboundOffer{}, public("inbound offer is " + string(state))
 	}
 	if contentLength != offer.Size {
 		b.mu.Unlock()
-		return InboundOffer{}, errors.New("inbound upload length does not match offer")
+		return InboundOffer{}, public("inbound upload length does not match offer")
 	}
 	offer.State = InboundReceiving
 	profile, name, size, checksum := offer.profile, offer.Name, offer.Size, offer.SHA256

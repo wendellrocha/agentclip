@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -536,6 +537,28 @@ func TestFilePathItemCarriesOnlyThePath(t *testing.T) {
 	for _, bad := range []string{"", "relative.csv", filepath.Dir(path)} {
 		if _, err := FilePathItem(bad, ""); err == nil {
 			t.Errorf("FilePathItem(%q) was accepted", bad)
+		}
+	}
+}
+
+// A response never carries an error's own words unless they are a fixed sentence
+// written for callers. An OS error names the host path it failed on, and this is
+// what keeps it from reaching the remote side of the tunnel.
+func TestReasonSharesOnlyPublicErrors(t *testing.T) {
+	for _, err := range []error{ErrInvalidFile, ErrFileTooLarge, ErrImageTooLarge, ErrInvalidText, errOfferNotFound, errApprovalRequired, errInboundStorage} {
+		if got := Reason(err); got != err.Error() {
+			t.Errorf("Reason(%v) = %q, want its own text", err, got)
+		}
+	}
+	if got := Reason(fmt.Errorf("prepare: %w", ErrInvalidFile)); got != ErrInvalidFile.Error() {
+		t.Errorf("a wrapped public error lost its text: %q", got)
+	}
+
+	_, osErr := os.Open(filepath.Join(t.TempDir(), "secret-host-file.txt"))
+	for _, err := range []error{osErr, fmt.Errorf("find inbox: %w", osErr), errors.New("read /Users/someone/private.txt"), nil} {
+		got := Reason(err)
+		if got != "request rejected" || strings.Contains(got, "/") {
+			t.Errorf("Reason(%v) = %q, want the generic sentence", err, got)
 		}
 	}
 }

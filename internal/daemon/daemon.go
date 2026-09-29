@@ -165,7 +165,7 @@ func (d *Daemon) arm(w http.ResponseWriter, r *http.Request) {
 	}
 	im, err := d.Bridge.Arm(png, req.Width, req.Height)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, bridge.Reason(err), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]any{"id": im.ID, "expires_at": im.ExpiresAt})
@@ -193,7 +193,7 @@ func (d *Daemon) snapshot(w http.ResponseWriter, r *http.Request) {
 		if input.Kind == bridge.ItemFile {
 			file, err := bridge.FileItem(input.Path, input.MIMEType)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				http.Error(w, bridge.Reason(err), http.StatusBadRequest)
 				return
 			}
 			item.File = file.File
@@ -202,7 +202,7 @@ func (d *Daemon) snapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot, err := d.Bridge.ArmItems(items)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, bridge.Reason(err), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, snapshot)
@@ -213,7 +213,7 @@ func (d *Daemon) session(w http.ResponseWriter, r *http.Request) {
 	}
 	s, t, err := d.Bridge.CreateSession(0)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		http.Error(w, bridge.Reason(err), http.StatusConflict)
 		return
 	}
 	writeJSON(w, map[string]any{"id": s.ID, "token": t, "expires_at": s.ExpiresAt})
@@ -227,7 +227,7 @@ func (d *Daemon) persistentSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Bridge.RegisterPersistentSessionWithUpload(request.ID, request.Token, request.UploadToken); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, bridge.Reason(err), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]bool{"registered": true})
@@ -280,7 +280,7 @@ func (d *Daemon) inboundAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		http.Error(w, bridge.Reason(err), http.StatusConflict)
 		return
 	}
 	writeJSON(w, offer)

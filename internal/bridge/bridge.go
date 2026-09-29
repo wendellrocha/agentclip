@@ -35,14 +35,33 @@ const (
 	MaxDimension  = 4096
 )
 
+// publicError is an error whose text is safe to show to any caller: it is a fixed
+// sentence written here, never built from a path, an OS error or input.
+type publicError struct{ message string }
+
+func (e *publicError) Error() string { return e.message }
+
+func public(message string) error { return &publicError{message} }
+
+// Reason is the text to send to a caller for err. Only errors made with public
+// carry their own words; anything else, such as an OS error that names a host
+// path, is reduced to a generic sentence so it cannot leak through a response.
+func Reason(err error) string {
+	var known *publicError
+	if errors.As(err, &known) {
+		return known.message
+	}
+	return "request rejected"
+}
+
 var (
-	ErrImageTooLarge   = errors.New("image exceeds maximum size")
-	ErrInvalidImage    = errors.New("image is not a valid PNG")
-	ErrImageDimensions = errors.New("image dimensions are invalid")
-	ErrTextTooLarge    = errors.New("text exceeds maximum size")
-	ErrInvalidText     = errors.New("text is not valid UTF-8")
-	ErrFileTooLarge    = errors.New("file exceeds maximum size")
-	ErrInvalidFile     = errors.New("file must be a regular file")
+	ErrImageTooLarge   = public("image exceeds maximum size")
+	ErrInvalidImage    = public("image is not a valid PNG")
+	ErrImageDimensions = public("image dimensions are invalid")
+	ErrTextTooLarge    = public("text exceeds maximum size")
+	ErrInvalidText     = public("text is not valid UTF-8")
+	ErrFileTooLarge    = public("file exceeds maximum size")
+	ErrInvalidFile     = public("file must be a regular file")
 )
 
 type ItemKind string
@@ -164,7 +183,7 @@ func (b *Bridge) Arm(imagePNG []byte, width, height int) (ArmedImage, error) {
 // local until their individual item endpoint is requested.
 func (b *Bridge) ArmItems(items []Item) (Snapshot, error) {
 	if len(items) == 0 {
-		return Snapshot{}, errors.New("clipboard snapshot has no items")
+		return Snapshot{}, public("clipboard snapshot has no items")
 	}
 	fileCount := 0
 	prepared := make(map[string]*armedItem, len(items))
@@ -174,7 +193,7 @@ func (b *Bridge) ArmItems(items []Item) (Snapshot, error) {
 			item.ID = randomID()
 		}
 		if _, exists := prepared[item.ID]; exists {
-			return Snapshot{}, errors.New("clipboard snapshot has duplicate item IDs")
+			return Snapshot{}, public("clipboard snapshot has duplicate item IDs")
 		}
 		armed, err := prepareItem(item)
 		if err != nil {
@@ -355,7 +374,7 @@ func (b *Bridge) RegisterPersistentSession(id, token string) error {
 // capabilities for reading the clipboard and offering files to the host.
 func (b *Bridge) RegisterPersistentSessionWithUpload(id, token, uploadToken string) error {
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(token) == "" {
-		return errors.New("persistent session ID and token are required")
+		return public("persistent session ID and token are required")
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -377,7 +396,7 @@ func (b *Bridge) CreateSession(ttl time.Duration) (Session, string, error) {
 	now := b.now()
 	b.pruneSessionsLocked(now)
 	if b.snapshot == nil || !now.Before(b.snapshot.ExpiresAt) {
-		return Session{}, "", errors.New("no clipboard item armed")
+		return Session{}, "", public("no clipboard item armed")
 	}
 	if ttl <= 0 {
 		ttl = b.ttl
