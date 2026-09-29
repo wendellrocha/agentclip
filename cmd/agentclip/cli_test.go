@@ -103,6 +103,9 @@ func TestCLICommandsRejectMissingArguments(t *testing.T) {
 		{[]string{"harness", "install", "pi"}, "usage: agentclip harness"},
 		{[]string{"ssh"}, "usage: agentclip ssh"},
 		{[]string{"upgrade", "--bogus"}, "usage: agentclip upgrade"},
+		{[]string{"companion", "autostart"}, "usage: agentclip companion autostart"},
+		{[]string{"companion", "autostart", "enable"}, "usage: agentclip companion autostart"},
+		{[]string{"companion", "autostart", "bogus", "p"}, "usage: agentclip companion autostart"},
 	} {
 		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
 			result := runCLI(t, test.args...)
@@ -155,5 +158,19 @@ func TestCLICommandsOnAnUnknownProfileFailWithoutSideEffects(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(cache, "agentclip", "logs", "nope.log")); err == nil {
 			t.Error("asking for the logs of an unknown profile created a log file")
 		}
+	}
+}
+
+// Autostart never touches the system for a profile that does not exist, and
+// reporting on it is harmless.
+func TestCLIAutostartNeedsAProfileAndReportsWithoutSideEffects(t *testing.T) {
+	if result := runCLI(t, "companion", "autostart", "enable", "nope"); result.exitCode != 1 || !strings.Contains(result.stderr, `read companion profile "nope"`) {
+		t.Fatalf("enable for a missing profile = exit %d, stderr %q", result.exitCode, result.stderr)
+	}
+	if result := runCLI(t, "companion", "autostart", "status", "nope"); result.exitCode != 0 || !strings.Contains(result.stdout, "does not start when you log in") {
+		t.Fatalf("status = exit %d, stdout %q, stderr %q", result.exitCode, result.stdout, result.stderr)
+	}
+	if result := runCLI(t, "companion", "autostart", "status", "../escape"); result.exitCode != 1 || !strings.Contains(result.stderr, "invalid Companion profile") {
+		t.Fatalf("status for a bad name = exit %d, stderr %q", result.exitCode, result.stderr)
 	}
 }

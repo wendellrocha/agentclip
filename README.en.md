@@ -183,24 +183,33 @@ to stop the Companion. It listens on `127.0.0.1` only. See all the details in th
 [Command reference](COMMANDS.md#página-web-do-companion) (in Portuguese).
 
 The profile — SSH destination, remote port and pairing token — is saved on the
-host. The running process, the bridge and the tunnel are not: AgentClip **does
-not install an automatic startup service** (LaunchAgent on macOS, systemd on
-Linux or Task Scheduler on Windows), nor does it pick the last profile
-automatically after login. So if the **host** restarts, start the profile you
-want again:
+host. The running process, the bridge and the tunnel are not. By default
+AgentClip **does not install an automatic startup service**, so if the **host**
+restarts, start the profile you want again:
 
 ```bash
 agentclip companion start m2
 ```
 
+To have the Companion start by itself when you log in, turn on autostart for the
+profile. AgentClip uses what each system already has: a LaunchAgent on macOS, a
+systemd user unit on Linux and a Task Scheduler task on Windows.
+
+```bash
+agentclip companion autostart enable m2
+agentclip companion autostart status m2
+agentclip companion autostart disable m2
+```
+
+Turning it off removes the service but does not stop a Companion that is already
+running. If the Companion is already running when the login starts the service,
+the service does not open a second one.
+
 If only the **remote server** goes down or restarts while the local Companion
 keeps running, it tries to re-establish the SSH tunnel automatically, backing
 off progressively from 1 to 30 seconds (starting over at 1 second after a
 tunnel that stayed up for at least a minute). When the connection returns, the same
-profile and the same remote port are used again. If you want the Companion to
-start with the system, use your operating system's service manager to run
-`agentclip companion start <profile>` explicitly after login; AgentClip does not
-set up that automation yet.
+profile and the same remote port are used again.
 
 By default, `setup`, `pair` and `connect` use every supported harness they find.
 Installing and registering the integration is automatic: you do not need to

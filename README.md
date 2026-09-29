@@ -181,24 +181,34 @@ para parar o Companion. Ela escuta somente em `127.0.0.1`. Veja todos os
 detalhes em [Referência de comandos](COMMANDS.md#página-web-do-companion).
 
 O perfil — destino SSH, porta remota e token de pareamento — fica salvo no
-host. O processo em execução, o bridge e o túnel não: AgentClip **não instala
-um serviço de inicialização automática** (LaunchAgent no macOS, systemd no
-Linux ou Agendador de Tarefas no Windows), nem escolhe automaticamente o
-último perfil após o login. Portanto, se o **host** for reiniciado, inicie o
-perfil desejado novamente:
+host. O processo em execução, o bridge e o túnel não. Por padrão o AgentClip
+**não instala um serviço de inicialização automática**, então, se o **host**
+for reiniciado, inicie o perfil desejado novamente:
 
 ```bash
 agentclip companion start m2
 ```
 
+Para o Companion subir sozinho quando você entrar na sessão, ative a
+inicialização automática do perfil. O AgentClip usa o que cada sistema já tem:
+um LaunchAgent no macOS, uma unidade de usuário do systemd no Linux e uma tarefa
+do Agendador de Tarefas no Windows.
+
+```bash
+agentclip companion autostart enable m2
+agentclip companion autostart status m2
+agentclip companion autostart disable m2
+```
+
+Desativar remove o serviço, mas não para um Companion que já esteja rodando. Se
+o Companion já estiver rodando quando o login iniciar o serviço, o serviço não
+abre um segundo.
+
 Se apenas o **servidor remoto** cair ou for reiniciado enquanto o Companion
 local continua rodando, ele tenta restabelecer o túnel SSH automaticamente,
 com espera progressiva de 1 a 30 segundos (que recomeça em 1 segundo depois de
 um túnel que ficou de pé por pelo menos um minuto). Quando a conexão voltar, o mesmo
-perfil e a mesma porta remota voltam a ser usados. Se quiser que o Companion
-suba junto com o sistema, use o gerenciador de serviços do seu sistema
-operacional para executar explicitamente `agentclip companion start <perfil>`
-após o login; essa automação ainda não é configurada pelo AgentClip.
+perfil e a mesma porta remota voltam a ser usados.
 
 Por padrão, `setup`, `pair` e `connect` usam todos os harnesses suportados que
 encontrarem. A instalação/registro da integração é automática: não é preciso
