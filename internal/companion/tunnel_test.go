@@ -156,8 +156,9 @@ func TestTunnelWaitGrowsToItsCapAndStartsOverAfterAStableTunnel(t *testing.T) {
 	if gap(1) < 90*time.Millisecond || gap(2) < 190*time.Millisecond || gap(3) < 390*time.Millisecond {
 		t.Errorf("the wait did not grow: gaps %v %v %v %v", gap(0), gap(1), gap(2), gap(3))
 	}
-	if gap(3) > time.Second {
-		t.Errorf("the wait exceeded its cap: %v", gap(3))
+	// The fifth wait would be 800ms if it kept doubling; the cap holds it at 400ms.
+	if gap(4) < 390*time.Millisecond || gap(4) > 700*time.Millisecond {
+		t.Errorf("the wait after the cap was reached is %v, want it held near 400ms", gap(4))
 	}
 	// The sixth run stayed up 0.8s, past the 300ms threshold, so the next wait
 	// starts over at 50ms instead of the 400ms cap it had reached.
