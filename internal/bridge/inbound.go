@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -375,7 +377,14 @@ func writeInboundFile(profile, offerID, name string, size int64, checksum string
 	if err != nil {
 		return "", fmt.Errorf("find local AgentClip inbox: %w", err)
 	}
-	directory := filepath.Join(cache, "agentclip", "received", profile, offerID)
+	if !validInboundProfile(profile) || !inboundComponentPattern.MatchString(offerID) || !validInboundName(name) {
+		return "", errInboundStorage
+	}
+	root := filepath.Join(cache, "agentclip", "received")
+	directory := filepath.Join(root, profile, offerID)
+	if !within(root, directory) {
+		return "", errInboundStorage
+	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return "", err
 	}
@@ -405,14 +414,48 @@ func writeInboundFile(profile, offerID, name string, size int64, checksum string
 		return "", errInboundVerification
 	}
 	path := filepath.Join(directory, name)
+	if !within(directory, path) {
+		return "", errInboundStorage
+	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
+// inboundComponentPattern matches what may name a directory level of the inbox:
+// the ids the bridge generates and the profile names the CLI accepts.
+var inboundComponentPattern = regexp.MustCompile(`^[0-9A-Za-z_-]{1,64}$`)
+
+// within reports whether target is inside root, without ever leaving it through
+// "..", an absolute path or a volume name.
+func within(root, target string) bool {
+	relative, err := filepath.Rel(root, target)
+	return err == nil && relative != "." && filepath.IsLocal(relative)
+}
+
+// validInboundName accepts one plain file name that is safe to create on any
+// platform. The name comes from another machine, so it must not act as a path
+// (separators of either style, "." or ".."), and it must not mean something
+// special where it is saved: control characters, and on Windows the characters
+// that select an alternate data stream or a device, or a trailing dot or space
+// that Windows silently strips.
 func validInboundName(name string) bool {
-	return name != "" && filepath.Base(name) == name && name != "." && name != string(filepath.Separator)
+	if name == "" || len(name) > 255 || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	if filepath.Base(name) != name || !filepath.IsLocal(name) || strings.TrimRight(name, " .") != name {
+		return false
+	}
+	for _, character := range name {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+		if runtime.GOOS == "windows" && strings.ContainsRune(`<>:"|?*`, character) {
+			return false
+		}
+	}
+	return true
 }
 
 func validChecksum(value string) bool {
@@ -423,9 +466,13 @@ func validChecksum(value string) bool {
 	return err == nil
 }
 
+func validInboundProfile(name string) bool { return inboundComponentPattern.MatchString(name) }
+
+// inboundProfile names the inbox folder of a session. Only a valid profile name
+// is used, so a session id can never point the folder outside the inbox.
 func inboundProfile(sessionID string) string {
 	name := strings.TrimPrefix(sessionID, "companion:")
-	if name == "" || filepath.Base(name) != name {
+	if !validInboundProfile(name) {
 		return "default"
 	}
 	return name
