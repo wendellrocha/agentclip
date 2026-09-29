@@ -123,6 +123,9 @@ func TestTunnelReconnectsAfterExitsReportsEachStateAndStopsOnCancel(t *testing.T
 // over once a tunnel has stayed up: a healthy tunnel that drops after hours
 // must not inherit the wait earned by failures long before.
 func TestTunnelWaitGrowsToItsCapAndStartsOverAfterAStableTunnel(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("the fake ssh is a POSIX shell script")
+	}
 	fastTunnel(t, 50*time.Millisecond, 400*time.Millisecond, 300*time.Millisecond)
 	bin := t.TempDir()
 	stamps := filepath.Join(t.TempDir(), "stamps")
