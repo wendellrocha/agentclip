@@ -73,7 +73,7 @@ func (r Runner) Run(ctx context.Context) error {
 		return fmt.Errorf("locate running AgentClip executable: %w", err)
 	}
 	if r.localIsCurrent(tag) {
-		return r.updateServersOnly(ctx, tag, stdout)
+		return r.updateServersOnly(tag, stdout)
 	}
 	staged, err := r.Prepare(ctx, tag, executable)
 	if err != nil {
@@ -146,7 +146,7 @@ func (r Runner) localIsCurrent(tag string) bool {
 // updateServersOnly is the upgrade of a machine that already runs the latest
 // release: the servers may still lag, but there is nothing to download, replace
 // or restart here.
-func (r Runner) updateServersOnly(_ context.Context, tag string, stdout io.Writer) error {
+func (r Runner) updateServersOnly(tag string, stdout io.Writer) error {
 	profiles, err := r.Profiles()
 	if err != nil {
 		return err
