@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -351,7 +352,14 @@ func cleanupInbox(root string, cutoff time.Time) error {
 	return nil
 }
 
+// safeItemID limits the ids used to name files and build request paths to the
+// characters the bridge generates.
+var safeItemID = regexp.MustCompile(`^[0-9A-Za-z_-]{1,64}$`)
+
 func (p *HTTPProvider) downloadFile(ctx context.Context, directory string, item ItemMetadata) (MaterializedFile, error) {
+	if !safeItemID.MatchString(item.ID) {
+		return MaterializedFile{}, fmt.Errorf("clipboard item has an invalid id")
+	}
 	transferCtx, cancel := context.WithTimeout(ctx, fileTransferTTL)
 	defer cancel()
 	response, err := p.requestWithClient(transferCtx, "/v1/items/"+item.ID, &http.Client{Timeout: fileTransferTTL})

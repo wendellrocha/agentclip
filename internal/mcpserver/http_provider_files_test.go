@@ -63,8 +63,9 @@ func newFileBridge(t *testing.T, files map[string][]byte, names map[string]strin
 	t.Helper()
 	bridge := &fileBridge{content: files}
 	for id, data := range files {
-		name := names[id]
-		if name == "" {
+		// An entry that is present but empty stays empty: that is the edge case.
+		name, present := names[id]
+		if !present {
 			name = id + ".txt"
 		}
 		bridge.items = append(bridge.items, ItemMetadata{ID: id, Kind: "file", Name: name, Size: int64(len(data)), SHA256: sumOf(data), MIMEType: "text/plain"})
@@ -102,6 +103,23 @@ func TestMaterializeFilesWritesVerifiedFilesToAPrivateDirectory(t *testing.T) {
 				t.Errorf("%s has permissions %v; group and others must have no access", path, perm)
 			}
 		}
+	}
+}
+
+// The id names the fallback file and the request path, so an id that is not
+// filename-safe is refused before anything is written.
+func TestMaterializeFilesRefusesUnsafeItemIDs(t *testing.T) {
+	for _, id := range []string{"../../escape", "a/b", `a\b`, "..", "", strings.Repeat("a", 65)} {
+		t.Run("id="+id, func(t *testing.T) {
+			bridge := &fileBridge{content: map[string][]byte{id: []byte("data")}}
+			bridge.items = []ItemMetadata{{ID: id, Kind: "file", Name: "..", Size: 4, SHA256: sumOf([]byte("data")), MIMEType: "text/plain"}}
+			server := httptest.NewServer(bridge.handler(t))
+			t.Cleanup(server.Close)
+			provider := providerForServer(t, server, "session-token")
+			if result, err := provider.MaterializeFiles(context.Background(), []string{id}); err == nil {
+				t.Fatalf("id %q was accepted: %+v", id, result)
+			}
+		})
 	}
 }
 
