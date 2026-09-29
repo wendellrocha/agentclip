@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -111,5 +114,48 @@ func TestControlEndpointsKeepTheirSpecificValidationMessages(t *testing.T) {
 	}
 	if status, _ := controlRequest(t, d, http.MethodPost, "/v1/control/persistent-session", []byte(`{"id":"","token":""}`)); status != http.StatusBadRequest {
 		t.Fatalf("persistent session without credentials = %d, want 400", status)
+	}
+}
+
+// The control plane carries a path and nothing else about the file: the bridge
+// measures size, time and SHA-256 itself, so a caller cannot vouch for a file
+// with numbers of its own.
+func TestSnapshotArmsFilesFromThePathAlone(t *testing.T) {
+	d := startForHandlers(t)
+	path := filepath.Join(t.TempDir(), "note.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A leftover "file" object with made-up metadata is ignored, not trusted.
+	body := fmt.Sprintf(`{"items":[{"kind":"file","path":%q,"file":{"Path":%q,"Size":1,"SHA256":"00"}}]}`, path, path)
+	status, reply := controlRequest(t, d, http.MethodPost, "/v1/control/snapshot", []byte(body))
+	if status != http.StatusOK {
+		t.Fatalf("snapshot = %d %q", status, reply)
+	}
+	if !strings.Contains(reply, `"size":5`) || !strings.Contains(reply, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824") {
+		t.Fatalf("metadata was not measured from the file: %s", reply)
+	}
+}
+
+func TestSnapshotRefusesFilePathsThatAreNotOneAbsoluteRegularFile(t *testing.T) {
+	d := startForHandlers(t)
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(regular, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sep := string(os.PathSeparator) // Join would clean the ".." away
+	paths := []string{"", "a.txt", dir + sep + ".." + sep + filepath.Base(dir) + sep + "a.txt", dir, filepath.Join(dir, "missing")}
+	link := filepath.Join(dir, "link")
+	if os.Symlink(regular, link) == nil {
+		paths = append(paths, link)
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			body := fmt.Sprintf(`{"items":[{"kind":"file","path":%q}]}`, path)
+			if status, reply := controlRequest(t, d, http.MethodPost, "/v1/control/snapshot", []byte(body)); status != http.StatusBadRequest {
+				t.Fatalf("path %q = %d %q, want 400", path, status, reply)
+			}
+		})
 	}
 }

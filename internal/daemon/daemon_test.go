@@ -148,7 +148,7 @@ func TestSnapshotControlArmsLocalFileReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := json.Marshal(snapshotRequest{Items: []snapshotItemRequest{{Kind: item.Kind, MIMEType: item.MIMEType, Name: item.Name, File: item.File}}})
+	body, err := json.Marshal(snapshotRequest{Items: []snapshotItemRequest{{Kind: item.Kind, MIMEType: item.MIMEType, Name: item.Name, Path: path}}})
 	if err != nil {
 		t.Fatal(err)
 	}
