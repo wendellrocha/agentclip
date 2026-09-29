@@ -83,6 +83,11 @@ installation is refused.
   falling back to a weaker method. Without `gh`, or if the release has no
   bundle, they query the GitHub attestations API.
 - **`agentclip upgrade`:** queries the GitHub attestations API.
+- **Servers (`agentclip setup` and `agentclip upgrade`):** this machine downloads
+  the binary for the server's platform, verifies it the way `upgrade` does and
+  sends it over the SSH connection. No script is downloaded or run on the
+  server, which only checks that the SHA-256 of what it received is the verified
+  binary's; a truncated transfer never replaces the binary that already works.
 
 The API lookup confirms that the repository holds an attestation for exactly the
 file's SHA-256, made by `release.yml` on the version's tag, which stops release
@@ -92,8 +97,9 @@ use the manual commands above.
 
 If the API is down or its rate limit is exhausted, the installation is refused
 instead of proceeding unverified. To install anyway, with the SHA-256 check
-only, set `AGENTCLIP_SKIP_ATTESTATION=1`. With `agentclip upgrade` the variable
-is also passed on to the servers' installers. Versions before `v0.7.1-rc.1` have
+only, set `AGENTCLIP_SKIP_ATTESTATION=1`. With `agentclip setup` and
+`agentclip upgrade` the variable also applies to the binaries sent to servers.
+Versions before `v0.7.1-rc.1` have
 no attestation and are installed with the SHA-256 only, with a warning.
 
 ## Quick start
