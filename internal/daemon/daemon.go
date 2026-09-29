@@ -107,13 +107,11 @@ func Start(initial *Image, controlToken string) (*Daemon, error) {
 }
 
 func (d *Daemon) release(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var status release.Status
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&status); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSON(w, r, 8*1024, &status) {
 		return
 	}
 	if status.CurrentVersion == "" {
@@ -151,13 +149,11 @@ func LoadState() (State, error) {
 }
 
 func (d *Daemon) arm(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req armRequest
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, bridge.MaxImageBytes*2)).Decode(&req) != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSON(w, r, bridge.MaxImageBytes*2, &req) {
 		return
 	}
 	png, err := base64.StdEncoding.DecodeString(req.PNG)
@@ -173,13 +169,11 @@ func (d *Daemon) arm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"id": im.ID, "expires_at": im.ExpiresAt})
 }
 func (d *Daemon) snapshot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var request snapshotRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, bridge.MaxImageBytes*2)).Decode(&request); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSON(w, r, bridge.MaxImageBytes*2, &request) {
 		return
 	}
 	items := make([]bridge.Item, 0, len(request.Items))
@@ -203,8 +197,7 @@ func (d *Daemon) snapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, snapshot)
 }
 func (d *Daemon) session(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	s, t, err := d.Bridge.CreateSession(0)
@@ -215,13 +208,11 @@ func (d *Daemon) session(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"id": s.ID, "token": t, "expires_at": s.ExpiresAt})
 }
 func (d *Daemon) persistentSession(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var request persistentSessionRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&request); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSON(w, r, 4*1024, &request) {
 		return
 	}
 	if err := d.Bridge.RegisterPersistentSessionWithUpload(request.ID, request.Token, request.UploadToken); err != nil {
@@ -232,8 +223,7 @@ func (d *Daemon) persistentSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) inbound(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	writeJSON(w, d.Bridge.InboundLocalStatus())
@@ -262,8 +252,7 @@ func (d *Daemon) inboundAction(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(w, io.LimitReader(file, offer.Size))
 		return
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var (
@@ -286,8 +275,7 @@ func (d *Daemon) inboundAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, offer)
 }
 func (d *Daemon) shutdown(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	writeJSON(w, map[string]bool{"stopping": true})
@@ -355,4 +343,25 @@ func saveState(s State) error {
 		return err
 	}
 	return os.Rename(name, p)
+}
+
+// requireMethod lets a request through only when it uses the endpoint's single
+// accepted method. Otherwise it answers 405 and reports false.
+func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method == method {
+		return true
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+// decodeJSON reads a request body of at most limit bytes into value. A body
+// that is malformed or larger than the limit is answered with 400 and reported
+// as false, so the handler never acts on a partial request.
+func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, value any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(value); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return false
+	}
+	return true
 }
