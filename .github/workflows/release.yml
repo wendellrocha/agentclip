@@ -88,7 +88,31 @@ jobs:
           build darwin amd64 "" tar.gz
           build darwin arm64 "" tar.gz
           build windows amd64 .exe zip
-          (cd dist && sha256sum -- *.tar.gz *.zip > checksums.txt)
+
+      # The source is scanned weekly; this scans what is actually published, which
+      # also carries the standard library of the Go version that built it. The tool
+      # is pinned: this job can sign, so it must not run whatever is newest.
+      - name: Scan the binaries for known vulnerabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in dist/agentclip_*/agentclip dist/agentclip_*/agentclip.exe; do
+            [[ -f "$binary" ]] || continue
+            echo "== $binary"
+            go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode=binary "$binary"
+          done
+
+      # A CycloneDX inventory of the modules compiled into the binaries, published
+      # with the release and covered by the checksums and the attestation.
+      - name: Generate the SBOM
+        run: >
+          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+          app -json -licenses=false -std=false -main cmd/agentclip
+          -output "dist/agentclip_${VERSION}_sbom.cdx.json"
+
+      - name: Checksums
+        shell: bash
+        run: (cd dist && sha256sum -- *.tar.gz *.zip *.cdx.json > checksums.txt)
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
@@ -104,6 +128,7 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.cdx.json
             dist/checksums.txt
 
       # One bundle covers every archive, so installers can verify a download
@@ -154,6 +179,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.cdx.json
             dist/checksums.txt
             dist/checksums.txt.bundle
             dist/attestation.jsonl
