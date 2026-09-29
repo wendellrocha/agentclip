@@ -118,8 +118,9 @@ da `v0.7.1-rc.1`; `AGENTCLIP_SKIP_ATTESTATION=1` ignora essa checagem) e
 substitui o executável que está em uso.
 Também atualiza todos os destinos dos perfis salvos, usando a identidade SSH
 gerenciada pelo perfil quando houver. Para cada servidor, esta máquina baixa e
-verifica o binário da plataforma dele (`uname`) e o envia por SSH; nenhum script
-é executado no servidor. Uma falha em um servidor não impede as
+verifica o binário da plataforma dele (`uname`) e o envia por SSH; nenhum
+instalador é baixado para o servidor, e uma versão igual ou mais nova que já
+esteja lá não é substituída. Uma falha em um servidor não impede as
 tentativas nos demais nem a atualização local; o resumo final identifica cada
 perfil que falhou.
 
