@@ -29,6 +29,8 @@ func TestPrepareSelectsAssetVerifiesChecksumAndStagesBinary(t *testing.T) {
 			_, _ = w.Write(archive)
 		case "checksums.txt":
 			_, _ = w.Write([]byte(hex.EncodeToString(sum[:]) + "  " + asset + "\n"))
+		case "sha256:" + hex.EncodeToString(sum[:]):
+			_, _ = w.Write(attestationBody(t, hex.EncodeToString(sum[:]), "example/agentclip", releaseWorkflowPath, "refs/tags/"+version))
 		default:
 			http.NotFound(w, request)
 		}

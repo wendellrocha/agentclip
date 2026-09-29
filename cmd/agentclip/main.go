@@ -596,9 +596,12 @@ func runUpgrade(arguments []string) error {
 	if err != nil {
 		return fmt.Errorf("locate running AgentClip executable: %w", err)
 	}
-	staged, err := upgrader.Prepare(ctx, upgrader.Options{Version: tag, Executable: executable})
+	staged, err := upgrader.Prepare(ctx, upgrader.Options{Version: tag, Executable: executable, SkipAttestation: os.Getenv(upgrader.SkipAttestationEnv) == "1"})
 	if err != nil {
 		return fmt.Errorf("prepare AgentClip %s: %w", tag, err)
+	}
+	if staged.Notice != "" {
+		fmt.Fprintln(os.Stderr, "warning:", staged.Notice)
 	}
 	profiles, err := companion.ListProfiles()
 	if err != nil {

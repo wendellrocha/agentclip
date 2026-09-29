@@ -29,11 +29,18 @@ type Options struct {
 	GOARCH     string
 	Repository string
 	Client     *http.Client
+	// APIBaseURL overrides https://api.github.com, for tests.
+	APIBaseURL string
+	// SkipAttestation disables the build attestation check.
+	SkipAttestation bool
 }
 
 type StagedBinary struct {
 	Path   string
 	Target string
+	// Notice explains a verification step that was not performed, for the
+	// caller to show the user.
+	Notice string
 }
 
 func (s StagedBinary) Cleanup() {
@@ -42,8 +49,9 @@ func (s StagedBinary) Cleanup() {
 	}
 }
 
-// Prepare downloads the platform archive and checks it against checksums.txt.
-// The extracted binary is staged in the target directory, which verifies that
+// Prepare downloads the platform archive, checks it against checksums.txt and,
+// for releases that have one, against the repository's build attestation. The
+// extracted binary is staged in the target directory, which verifies that
 // the eventual atomic replacement has the needed local write permission.
 func Prepare(ctx context.Context, options Options) (StagedBinary, error) {
 	if options.Version == "" {
@@ -100,6 +108,10 @@ func Prepare(ctx context.Context, options Options) (StagedBinary, error) {
 	if !strings.EqualFold(expected, actual) {
 		return StagedBinary{}, errors.New("release checksum does not match checksums.txt")
 	}
+	notice, err := checkAttestation(ctx, client, options, repository, actual)
+	if err != nil {
+		return StagedBinary{}, err
+	}
 	binaryName := "agentclip" + extension
 	archiveBinary := filepath.ToSlash(filepath.Join(strings.TrimSuffix(asset, "."+archiveFormat), binaryName))
 	preparedPath := filepath.Join(temporaryDirectory, binaryName)
@@ -139,7 +151,31 @@ func Prepare(ctx context.Context, options Options) (StagedBinary, error) {
 		_ = os.Remove(stagedPath)
 		return StagedBinary{}, fmt.Errorf("mark replacement executable: %w", err)
 	}
-	return StagedBinary{Path: stagedPath, Target: target}, nil
+	return StagedBinary{Path: stagedPath, Target: target, Notice: notice}, nil
+}
+
+// checkAttestation enforces the build attestation and returns a notice when it
+// is legitimately not applied.
+func checkAttestation(ctx context.Context, client *http.Client, options Options, repository, digest string) (string, error) {
+	switch {
+	case options.SkipAttestation:
+		return "Build attestation check skipped (" + SkipAttestationEnv + " is set); only the published SHA-256 was verified.", nil
+	case !attestationRequired(options.Version):
+		return options.Version + " predates build attestations, so only its published SHA-256 was verified.", nil
+	}
+	apiBase := options.APIBaseURL
+	if apiBase == "" {
+		apiBase = defaultAPIBaseURL
+	}
+	err := verifyAttestation(ctx, client, apiBase, repository, options.Version, digest)
+	switch {
+	case err == nil:
+		return "", nil
+	case errors.Is(err, errNoAttestation):
+		return "", fmt.Errorf("refusing to install %s: %w; the download may have been tampered with", options.Version, err)
+	default:
+		return "", fmt.Errorf("could not verify the build attestation of %s: %w (set %s=1 to install with the SHA-256 check only)", options.Version, err, SkipAttestationEnv)
+	}
 }
 
 func platform(goos, goarch string) (extension, archiveFormat string, err error) {
