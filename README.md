@@ -86,7 +86,8 @@ o `gh` ou use os comandos manuais acima.
 
 Se a API estiver fora do ar ou com o limite de requisições estourado, a
 instalação é recusada em vez de seguir sem verificar. Para instalar mesmo assim,
-apenas com o SHA-256, defina `AGENTCLIP_SKIP_ATTESTATION=1`. Versões anteriores
+apenas com o SHA-256, defina `AGENTCLIP_SKIP_ATTESTATION=1`. No `agentclip upgrade`
+a variável também é repassada aos instaladores dos servidores. Versões anteriores
 à `v0.7.1-rc.1` não têm atestado e são instaladas só com o SHA-256, com um aviso.
 
 ## Início rápido
