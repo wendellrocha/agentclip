@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/wendellrocha/agentclip/internal/companion"
+	"github.com/wendellrocha/agentclip/internal/release"
 )
 
 const (
@@ -35,6 +36,35 @@ func remotePreflightCommandWithIdentity(destination, identityFile, agentExecutab
 	// command is required to load.
 	check := "export PATH=\"$HOME/.local/bin:$PATH\"; command -v agentclip >/dev/null && command -v " + shellQuote(agentExecutable) + " >/dev/null"
 	return remoteSSHCommand(destination, identityFile, "sh -lc "+shellQuote(check))
+}
+
+// MinRemoteVersion is the oldest remote agentclip that understands what setup
+// configures: the upload token for files sent from the server arrived in v0.5.0.
+// An older one registers the MCP entry and then fails on the tools, silently.
+const MinRemoteVersion = "v0.5.0"
+
+// VersionForProfile asks the server which agentclip it would run.
+func VersionForProfile(profile companion.Profile) *exec.Cmd {
+	script := "export PATH=\"$HOME/.local/bin:$PATH\"; agentclip version"
+	return remoteSSHCommand(profile.Destination, profile.SSHIdentityFile, "sh -lc "+shellQuote(script))
+}
+
+// CheckVersion decides whether the output of `agentclip version` from a server
+// is new enough. It reports what to do when it is not, and refuses output it
+// cannot read instead of assuming the server is fine.
+func CheckVersion(destination, output string) error {
+	version := strings.TrimSpace(output)
+	if line, _, found := strings.Cut(version, "\n"); found {
+		version = strings.TrimSpace(line)
+	}
+	comparison, err := release.Compare(version, MinRemoteVersion)
+	if err != nil {
+		return fmt.Errorf("could not read the agentclip version on %s (got %q); install or update it with `agentclip setup %s`", destination, version, destination)
+	}
+	if comparison < 0 {
+		return fmt.Errorf("agentclip %s on %s is older than %s, the oldest that supports this setup; update it with `agentclip upgrade` or `agentclip setup %s`", version, destination, MinRemoteVersion, destination)
+	}
+	return nil
 }
 
 func remoteSupportedAgentsCommand(destination string) *exec.Cmd {
