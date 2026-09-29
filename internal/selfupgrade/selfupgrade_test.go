@@ -29,6 +29,7 @@ type harness struct {
 
 	latestErr, executableErr, prepareErr, profilesErr, activeErr, stopErr, replaceErr, restartErr, windowsErr error
 	remoteErrs                                                                                                map[string]error
+	remoteCurrent                                                                                             map[string]bool
 	restarted                                                                                                 [][]string
 
 	runner Runner
@@ -71,9 +72,10 @@ func newHarness(t *testing.T) *harness {
 			h.calls = append(h.calls, "active")
 			return h.active, h.activeErr
 		},
-		InstallRemote: func(profile companion.Profile, tag string) error {
+		InstallRemote: func(profile companion.Profile, tag string) (bool, error) {
 			h.calls = append(h.calls, "remote "+profile.Name+" "+tag)
-			return h.remoteErrs[profile.Name]
+			err := h.remoteErrs[profile.Name]
+			return err == nil && !h.remoteCurrent[profile.Name], err
 		},
 		StopCompanions: func(names []string) error {
 			h.calls = append(h.calls, "stop "+strings.Join(names, ","))
@@ -357,5 +359,72 @@ func TestSummaryAndFailureDetection(t *testing.T) {
 	}
 	if !HasFailure([]RemoteResult{{Profile: "a"}, {Profile: "b", Err: errors.New("ssh")}}) {
 		t.Fatal("a failed server must be reported")
+	}
+}
+
+// A machine that already runs the latest release has nothing to download,
+// replace or restart, but its servers may still lag behind.
+func TestUpgradeOfAnUpToDateMachineOnlyUpdatesTheServers(t *testing.T) {
+	for _, current := range []string{"v9.9.9", "9.9.9", "v10.0.0"} {
+		t.Run(current, func(t *testing.T) {
+			h := newHarness(t)
+			h.runner.CurrentVersion = current
+			h.profiles = []companion.Profile{profile("m2"), profile("vortx")}
+			h.active = []string{"m2", "vortx"}
+			h.remoteCurrent = map[string]bool{"m2": true}
+
+			if err := h.run(); err != nil {
+				t.Fatal(err)
+			}
+			h.expectCalls("latest", "executable", "profiles", "remote m2 v9.9.9", "remote vortx v9.9.9")
+			if h.targetContent() == "new" {
+				t.Fatal("the executable was replaced although it was current")
+			}
+			for _, want := range []string{"m2: already up to date", "vortx: updated", "AgentClip is already up to date (" + current + ")."} {
+				if !strings.Contains(h.stdout.String(), want) {
+					t.Errorf("output is missing %q:\n%s", want, h.stdout.String())
+				}
+			}
+			if strings.Contains(h.stdout.String(), "AgentClip updated to") {
+				t.Errorf("claimed an update that did not happen:\n%s", h.stdout.String())
+			}
+		})
+	}
+}
+
+func TestUpgradeOfAnOlderMachineStillReplacesItAndSaysServersWereCurrent(t *testing.T) {
+	h := newHarness(t)
+	h.runner.CurrentVersion = "v9.9.8"
+	h.profiles = []companion.Profile{profile("m2")}
+	h.active = []string{"m2"}
+	h.remoteCurrent = map[string]bool{"m2": true}
+	if err := h.run(); err != nil {
+		t.Fatal(err)
+	}
+	h.expectCalls("latest", "executable", "prepare v9.9.9", "profiles", "active", "remote m2 v9.9.9", "stop m2", "replace", "restart m2")
+	for _, want := range []string{"m2: already up to date", "AgentClip updated to v9.9.9."} {
+		if !strings.Contains(h.stdout.String(), want) {
+			t.Errorf("output is missing %q:\n%s", want, h.stdout.String())
+		}
+	}
+}
+
+func TestUpgradeOfAnUpToDateMachineStillReportsServerFailuresAndProfileErrors(t *testing.T) {
+	h := newHarness(t)
+	h.runner.CurrentVersion = "v9.9.9"
+	h.profiles = []companion.Profile{profile("m2")}
+	h.remoteErrs = map[string]error{"m2": errors.New("boom")}
+	if err := h.run(); err == nil || !strings.Contains(err.Error(), "could not be updated") {
+		t.Fatalf("err = %v, want the server failure reported", err)
+	}
+	if strings.Contains(h.stdout.String(), "already up to date (") {
+		t.Errorf("declared success despite a failure:\n%s", h.stdout.String())
+	}
+
+	h = newHarness(t)
+	h.runner.CurrentVersion = "v9.9.9"
+	h.profilesErr = errors.New("cannot list")
+	if err := h.run(); err == nil || !strings.Contains(err.Error(), "cannot list") {
+		t.Fatalf("err = %v, want the profile error", err)
 	}
 }

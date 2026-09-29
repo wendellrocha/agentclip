@@ -266,7 +266,8 @@ func runSetup(arguments []string) error {
 		EnsureIdentity: remote.EnsureSetupSSHIdentity,
 		ReleaseTag:     setup.ReleaseTag,
 		Install: func(destination, identityFile, tag string) error {
-			return remote.InstallVerified(context.Background(), destination, identityFile, tag, os.Stderr)
+			_, err := remote.InstallVerified(context.Background(), destination, identityFile, tag, os.Stderr)
+			return err
 		},
 		CompanionRunning: func(name string) bool {
 			state, err := companion.LoadRuntime(name)
@@ -488,17 +489,18 @@ func runUpgrade(arguments []string) error {
 	defer cancel()
 	checker := release.NewChecker()
 	return selfupgrade.Runner{
-		GOOS:       runtime.GOOS,
-		Stdout:     os.Stdout,
-		Stderr:     os.Stderr,
-		LatestTag:  checker.FetchLatest,
-		Executable: os.Executable,
+		GOOS:           runtime.GOOS,
+		Stdout:         os.Stdout,
+		Stderr:         os.Stderr,
+		CurrentVersion: buildinfo.Version,
+		LatestTag:      checker.FetchLatest,
+		Executable:     os.Executable,
 		Prepare: func(ctx context.Context, tag, executable string) (upgrader.StagedBinary, error) {
 			return upgrader.Prepare(ctx, upgrader.Options{Version: tag, Executable: executable, SkipAttestation: os.Getenv(upgrader.SkipAttestationEnv) == "1"})
 		},
 		Profiles:         companion.ListProfiles,
 		ActiveCompanions: activeCompanions,
-		InstallRemote: func(profile companion.Profile, tag string) error {
+		InstallRemote: func(profile companion.Profile, tag string) (bool, error) {
 			return remote.InstallVerified(context.Background(), profile.Destination, profile.SSHIdentityFile, tag, os.Stderr)
 		},
 		StopCompanions:           stopCompanions,

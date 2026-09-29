@@ -87,7 +87,9 @@ func fakeSSH(t *testing.T) (home string) {
 		t.Fatal(err)
 	}
 	home = t.TempDir()
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Only the system directories: an agentclip installed on the machine running
+	// the tests must not be mistaken for the one on the "server".
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
 	t.Setenv("HOME", home)
 	return home
 }
@@ -113,8 +115,8 @@ func TestInstallVerifiedSendsTheVerifiedBinaryWithoutRunningAScriptFromTheNetwor
 	var options upgrader.Options
 	stubFetch(t, "verified binary", "no attestation for this release", &options)
 	var stderr strings.Builder
-	if err := InstallVerified(context.Background(), "host", "", "v0.7.2", &stderr); err != nil {
-		t.Fatal(err)
+	if changed, err := InstallVerified(context.Background(), "host", "", "v0.7.2", &stderr); err != nil || !changed {
+		t.Fatalf("changed = %v, err = %v", changed, err)
 	}
 	installed := filepath.Join(home, ".local", "bin", "agentclip")
 	data, err := os.ReadFile(installed)
@@ -166,11 +168,15 @@ func TestInstallVerifiedNeverDowngradesAndSkipsWhatIsAlreadyThere(t *testing.T) 
 				return inner(ctx, options)
 			}
 			var stderr strings.Builder
-			if err := InstallVerified(context.Background(), "host", "", "v0.7.2", &stderr); err != nil {
+			changed, err := InstallVerified(context.Background(), "host", "", "v0.7.2", &stderr)
+			if err != nil {
 				t.Fatal(err)
 			}
 			data, _ := os.ReadFile(installed)
 			replaced := string(data) == "new binary"
+			if changed != replaced {
+				t.Fatalf("reported changed = %v but the binary was replaced = %v", changed, replaced)
+			}
 			if replaced != test.wantReplaced || fetched != test.wantReplaced {
 				t.Fatalf("replaced = %v, downloaded = %v, want %v (stderr %q)", replaced, fetched, test.wantReplaced, stderr.String())
 			}
@@ -188,7 +194,7 @@ func TestInstallVerifiedForwardsTheAttestationOptOutOnlyWhenExplicitlySet(t *tes
 			t.Setenv(upgrader.SkipAttestationEnv, value)
 			var options upgrader.Options
 			stubFetch(t, "binary", "", &options)
-			if err := InstallVerified(context.Background(), "host", "", "v0.7.2", nil); err != nil {
+			if _, err := InstallVerified(context.Background(), "host", "", "v0.7.2", nil); err != nil {
 				t.Fatal(err)
 			}
 			if options.SkipAttestation != want {
@@ -215,7 +221,7 @@ func TestInstallVerifiedRefusesUnverifiedAndDamagedBinaries(t *testing.T) {
 	fetchRelease = func(context.Context, upgrader.Options) (upgrader.Fetched, error) {
 		return upgrader.Fetched{}, errors.New("release checksum does not match checksums.txt")
 	}
-	err := InstallVerified(context.Background(), "host", "", "v0.7.2", nil)
+	_, err := InstallVerified(context.Background(), "host", "", "v0.7.2", nil)
 	if err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("an unverified binary was not refused: %v", err)
 	}
