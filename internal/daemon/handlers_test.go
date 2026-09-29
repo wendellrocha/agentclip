@@ -174,3 +174,26 @@ func TestControlErrorsNeverEchoTheHostPath(t *testing.T) {
 		t.Fatalf("the response repeats the host path: %q", reply)
 	}
 }
+
+// A caller that breaks a documented limit is told which one. These are fixed
+// sentences, so they are safe to show and must not be reduced to the generic one.
+func TestSnapshotLimitsAreExplainedToTheCaller(t *testing.T) {
+	d := startForHandlers(t)
+	dir := t.TempDir()
+	var items []string
+	for i := 0; i < bridge.MaxFiles+1; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("f%d.txt", i))
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, fmt.Sprintf(`{"kind":"file","path":%q}`, path))
+	}
+	status, reply := controlRequest(t, d, http.MethodPost, "/v1/control/snapshot", []byte(`{"items":[`+strings.Join(items, ",")+`]}`))
+	if status != http.StatusBadRequest || !strings.Contains(reply, fmt.Sprintf("exceeds %d files", bridge.MaxFiles)) {
+		t.Fatalf("too many files = %d %q, want the limit explained", status, reply)
+	}
+	status, reply = controlRequest(t, d, http.MethodPost, "/v1/control/snapshot", []byte(`{"items":[{"kind":"video"}]}`))
+	if status != http.StatusBadRequest || !strings.Contains(reply, "unsupported clipboard item kind") || strings.Contains(reply, "video") {
+		t.Fatalf("unknown kind = %d %q, want a fixed sentence that does not echo the input", status, reply)
+	}
+}

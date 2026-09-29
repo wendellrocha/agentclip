@@ -202,7 +202,7 @@ func (b *Bridge) ArmItems(items []Item) (Snapshot, error) {
 		if armed.meta.Kind == ItemFile {
 			fileCount++
 			if fileCount > MaxFiles {
-				return Snapshot{}, fmt.Errorf("clipboard snapshot exceeds %d files", MaxFiles)
+				return Snapshot{}, public(fmt.Sprintf("clipboard snapshot exceeds %d files", MaxFiles))
 			}
 		}
 		prepared[item.ID] = armed
@@ -286,7 +286,7 @@ func prepareItem(item Item) (*armedItem, error) {
 		meta.Size, meta.SHA256 = ref.Size, ref.SHA256
 		return &armedItem{meta: meta, file: &ref}, nil
 	default:
-		return nil, fmt.Errorf("unsupported clipboard item kind %q", item.Kind)
+		return nil, public("unsupported clipboard item kind")
 	}
 }
 
