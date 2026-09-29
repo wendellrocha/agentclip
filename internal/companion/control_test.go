@@ -203,7 +203,7 @@ func TestDashboardScriptNeverBuildsMarkupFromStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "createContextualFragment", "DOMParser", "eval(", "new Function", "srcdoc"} {
+	for _, forbidden := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "setHTML", "setHTMLUnsafe", "parseHTML", "parseHTMLUnsafe", "insertHTML", "document.write", "createContextualFragment", "DOMParser", "eval(", "new Function", "srcdoc"} {
 		if strings.Contains(string(script), forbidden) {
 			t.Errorf("app.js uses %s, which can turn server text into markup", forbidden)
 		}
