@@ -157,18 +157,24 @@ func TestEnsureAgentClipSSHKeyCreatesPrivateEd25519Key(t *testing.T) {
 }
 
 func TestCheckVersionAcceptsCurrentAndRefusesOldOrUnreadableServers(t *testing.T) {
-	for _, output := range []string{"v0.7.1\n", "0.7.0", "v0.5.0", "v0.8.0-rc.1", "v0.7.1\nextra line"} {
+	marked := func(version string) string { return versionMarker + version + "\n" }
+	for _, output := range []string{
+		marked("v0.7.1"), marked("0.7.0"), marked("v0.5.0"), marked("v0.8.0-rc.1"),
+		// A login shell may print anything before the marked line.
+		"Welcome to host\nv0.1.0 is the kernel\n" + marked("v0.7.1"),
+		marked("v0.7.1") + "trailing noise\n",
+	} {
 		if err := CheckVersion("host", output); err != nil {
 			t.Errorf("CheckVersion(%q) = %v, want it accepted", output, err)
 		}
 	}
-	for _, output := range []string{"v0.4.9", "0.1.0", "v0.5.0-rc.1"} {
+	for _, output := range []string{marked("v0.4.9"), marked("0.1.0"), marked("v0.5.0-rc.1"), "v0.1.0\n" + marked("v0.4.0")} {
 		err := CheckVersion("host", output)
 		if err == nil || !strings.Contains(err.Error(), "agentclip upgrade") || !strings.Contains(err.Error(), MinRemoteVersion) {
 			t.Errorf("CheckVersion(%q) = %v, want a refusal that says how to update", output, err)
 		}
 	}
-	for _, output := range []string{"", "dev", "agentclip: command not found", "v1"} {
+	for _, output := range []string{"", marked(""), marked("dev"), marked("agentclip: command not found"), marked("v1"), "v0.7.1\n", "Welcome\n"} {
 		err := CheckVersion("host", output)
 		if err == nil || !strings.Contains(err.Error(), "could not read") {
 			t.Errorf("CheckVersion(%q) = %v, want it refused as unreadable", output, err)
@@ -179,7 +185,7 @@ func TestCheckVersionAcceptsCurrentAndRefusesOldOrUnreadableServers(t *testing.T
 func TestVersionForProfileRunsAgentclipVersionThroughALoginShell(t *testing.T) {
 	command := VersionForProfile(companion.Profile{Destination: "bastion-m2", SSHIdentityFile: "/keys/m2"})
 	arguments := strings.Join(command.Args, " ")
-	for _, want := range []string{"bastion-m2", "/keys/m2", "sh -lc", ".local/bin", "agentclip version"} {
+	for _, want := range []string{"bastion-m2", "/keys/m2", "sh -lc", ".local/bin", "agentclip version", versionMarker} {
 		if !strings.Contains(arguments, want) {
 			t.Errorf("version command %q lacks %q", arguments, want)
 		}

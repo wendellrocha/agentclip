@@ -45,17 +45,24 @@ const MinRemoteVersion = "v0.5.0"
 
 // VersionForProfile asks the server which agentclip it would run.
 func VersionForProfile(profile companion.Profile) *exec.Cmd {
-	script := "export PATH=\"$HOME/.local/bin:$PATH\"; agentclip version"
+	// A login shell may print a banner or a warning first, so the version is
+	// marked and CheckVersion reads only the marked line.
+	script := "export PATH=\"$HOME/.local/bin:$PATH\"; printf '" + versionMarker + "%s\\n' \"$(agentclip version 2>/dev/null)\""
 	return remoteSSHCommand(profile.Destination, profile.SSHIdentityFile, "sh -lc "+shellQuote(script))
 }
 
-// CheckVersion decides whether the output of `agentclip version` from a server
-// is new enough. It reports what to do when it is not, and refuses output it
-// cannot read instead of assuming the server is fine.
+// versionMarker prefixes the line that carries the server's version.
+const versionMarker = "agentclip-version="
+
+// CheckVersion decides whether the output of VersionForProfile from a server is
+// new enough. It reports what to do when it is not, and refuses output it cannot
+// read instead of assuming the server is fine.
 func CheckVersion(destination, output string) error {
-	version := strings.TrimSpace(output)
-	if line, _, found := strings.Cut(version, "\n"); found {
-		version = strings.TrimSpace(line)
+	version := ""
+	for _, line := range strings.Split(output, "\n") {
+		if value, found := strings.CutPrefix(strings.TrimSpace(line), versionMarker); found {
+			version = strings.TrimSpace(value)
+		}
 	}
 	comparison, err := release.Compare(version, MinRemoteVersion)
 	if err != nil {
