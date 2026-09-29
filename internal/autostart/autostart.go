@@ -8,7 +8,7 @@ package autostart
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -62,7 +62,9 @@ func PlanFor(goos string, spec Spec) (Plan, error) {
 	if !profileName.MatchString(spec.Profile) {
 		return Plan{}, fmt.Errorf("invalid Companion profile %q", spec.Profile)
 	}
-	if !filepath.IsAbs(spec.Executable) && goos != "windows" {
+	// The plan is for goos, whichever system builds it, so paths follow goos's
+	// rules and not the host's: a macOS plan uses slashes even when built on Windows.
+	if goos != "windows" && !path.IsAbs(spec.Executable) {
 		return Plan{}, errors.New("the AgentClip executable path must be absolute")
 	}
 	if spec.HomeDir == "" && goos != "windows" {
@@ -87,7 +89,7 @@ func Label(profile string) string { return "com.wendellrocha.agentclip." + profi
 
 func darwinPlan(spec Spec) Plan {
 	label := Label(spec.Profile)
-	path := filepath.Join(spec.HomeDir, "Library", "LaunchAgents", label+".plist")
+	file := path.Join(spec.HomeDir, "Library", "LaunchAgents", label+".plist")
 	domain := fmt.Sprintf("gui/%d", spec.UID)
 	arguments := append([]string{spec.Executable}, serveArguments(spec)...)
 	var program strings.Builder
@@ -121,15 +123,15 @@ func darwinPlan(spec Spec) Plan {
 </plist>
 `
 	return Plan{
-		Files:   []File{{Path: path, Content: content}},
-		Enable:  []Command{{"launchctl", []string{"bootstrap", domain, path}}},
+		Files:   []File{{Path: file, Content: content}},
+		Enable:  []Command{{"launchctl", []string{"bootstrap", domain, file}}},
 		Disable: []Command{{"launchctl", []string{"bootout", domain + "/" + label}}},
 	}
 }
 
 func linuxPlan(spec Spec) Plan {
 	unit := "agentclip-" + spec.Profile + ".service"
-	path := filepath.Join(spec.HomeDir, ".config", "systemd", "user", unit)
+	file := path.Join(spec.HomeDir, ".config", "systemd", "user", unit)
 	words := make([]string, 0, 4)
 	for _, argument := range append([]string{spec.Executable}, serveArguments(spec)...) {
 		words = append(words, systemdQuote(argument))
@@ -147,7 +149,7 @@ RestartSec=5
 WantedBy=default.target
 `
 	return Plan{
-		Files:       []File{{Path: path, Content: content}},
+		Files:       []File{{Path: file, Content: content}},
 		Enable:      []Command{{"systemctl", []string{"--user", "daemon-reload"}}, {"systemctl", []string{"--user", "enable", "--now", unit}}},
 		Disable:     []Command{{"systemctl", []string{"--user", "disable", "--now", unit}}},
 		AfterRemove: []Command{{"systemctl", []string{"--user", "daemon-reload"}}},
