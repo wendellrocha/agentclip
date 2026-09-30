@@ -117,6 +117,16 @@ func TestCLICommandHelp(t *testing.T) {
 	if result := runCLI(t, "companion", "--help"); result.exitCode != 0 || !strings.Contains(result.stdout, "autostart") || !strings.Contains(result.stdout, "agentclip companion <accept|reject>") {
 		t.Fatalf("companion help = %+v", result)
 	}
+	// help is a command of its own, and is listed like the others.
+	if result := runCLI(t, "help", "help"); result.exitCode != 0 || !strings.Contains(result.stdout, "agentclip help [command]") || !strings.Contains(result.stdout, "agentclip <command> --help") {
+		t.Fatalf("help for help = %+v", result)
+	}
+	if result := runCLI(t, "help", "--help"); result.exitCode != 0 || !strings.Contains(result.stdout, "agentclip help [command]") {
+		t.Fatalf("help --help = %+v", result)
+	}
+	if result := runCLI(t); !strings.Contains(result.stdout, "\n  help ") {
+		t.Fatalf("the overview does not list help:\n%s", result.stdout)
+	}
 	// Asking for help never runs the command: nothing is created.
 	if result := runCLI(t, "upgrade", "--help"); result.exitCode != 0 || !strings.Contains(result.stdout, "attestation") {
 		t.Fatalf("upgrade help = %+v", result)

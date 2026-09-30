@@ -150,6 +150,14 @@ Companion workflow prefer "agentclip companion status <profile>", which also
 reports the tunnel and the clipboard.`),
 		},
 		{
+			name: "help", aliases: []string{"-h", "--help"}, group: groupMaintenance, run: runHelp,
+			summary: i18n.T("Show the list of commands, or the help of one command"),
+			usage:   []string{"agentclip help [command]", "agentclip <command> --help"},
+			details: i18n.T(`Without arguments, lists every command with a one-line summary. With a command,
+explains it: its syntax, what it does and its options. Asking for help never
+runs the command.`),
+		},
+		{
 			name: "version", group: groupMaintenance, run: func([]string) error { printVersion(); return nil },
 			aliases: []string{"--version", "-v"},
 			summary: i18n.T("Print the version"),
