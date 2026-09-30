@@ -490,3 +490,21 @@ func TestUpgradeOfACurrentMachineDoesNotAnnounceWhatItDoesNotDo(t *testing.T) {
 		}
 	}
 }
+
+// The replacement is announced when it starts, not before the Companions have
+// stopped: if they cannot be stopped, nothing is replaced and nothing is said.
+func TestUpgradeDoesNotAnnounceTheReplacementWhenTheCompanionsCannotBeStopped(t *testing.T) {
+	h := newHarness(t)
+	h.profiles = []companion.Profile{profile("m2")}
+	h.active = []string{"m2"}
+	h.stopErr = errors.New("still running")
+	if err := h.run(); err == nil {
+		t.Fatal("the upgrade succeeded although the Companions could not be stopped")
+	}
+	if strings.Contains(h.stdout.String(), "Replacing this machine") {
+		t.Errorf("announced a replacement that never happened:\n%s", h.stdout.String())
+	}
+	if h.targetContent() == "new" {
+		t.Error("the executable was replaced")
+	}
+}

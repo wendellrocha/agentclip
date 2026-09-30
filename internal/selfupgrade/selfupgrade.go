@@ -105,11 +105,6 @@ func (r Runner) Run(ctx context.Context) error {
 		updated, err := r.InstallRemote(profile, tag)
 		results = append(results, RemoteResult{Profile: profile.Name, Updated: updated, Err: err})
 	}
-	if r.GOOS != "windows" {
-		// The servers are done; only now does this machine change, which is why it
-		// comes last: a failure before this point leaves it as it was found.
-		fmt.Fprintln(stdout, i18n.T("Replacing this machine's executable..."))
-	}
 	if err := r.StopCompanions(active); err != nil {
 		staged.Cleanup()
 		_ = r.RestartCompanions(active)
@@ -128,6 +123,10 @@ func (r Runner) Run(ctx context.Context) error {
 		fmt.Fprintln(stdout, i18n.T("AgentClip %s will replace itself and restart %d Companion(s) shortly.", tag, len(active)))
 		return nil
 	}
+	// The servers are done and the Companions are stopped; only now does this
+	// machine change, which is why it comes last: a failure before this point
+	// leaves it as it was found, so the line is not printed earlier.
+	fmt.Fprintln(stdout, i18n.T("Replacing this machine's executable..."))
 	if err := r.Replace(staged.Path, staged.Target); err != nil {
 		staged.Cleanup()
 		_ = r.RestartCompanions(active)
