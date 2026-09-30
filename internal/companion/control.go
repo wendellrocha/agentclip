@@ -8,13 +8,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"mime"
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/wendellrocha/agentclip/internal/i18n"
 )
 
 //go:embed ui/index.html ui/assets/*
@@ -89,13 +93,14 @@ func StartControl(profile string, snapshot func() any, stop func(), inboundActio
 		if r.URL.Path == prefix || r.URL.Path == prefix+"/" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Vary", "Accept-Language")
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 			page, err := dashboardFiles.ReadFile("ui/index.html")
 			if err != nil {
 				http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
 				return
 			}
-			_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "{{BASE}}", prefix)))
+			_, _ = w.Write([]byte(renderDashboard(string(page), prefix, dashboardLanguage(r))))
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, prefix+"/assets/") && r.Method == http.MethodGet {
@@ -229,4 +234,60 @@ func noStore(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// dashboardLanguage is the language of a page: ?lang= wins, then what the browser
+// asks for, then the language of this process (AGENTCLIP_LANG), then English.
+func dashboardLanguage(r *http.Request) string {
+	if language, ok := i18n.Supported(r.URL.Query().Get("lang")); ok {
+		return language
+	}
+	if language := i18n.FromAcceptLanguage(r.Header.Get("Accept-Language")); language != "" {
+		return language
+	}
+	return i18n.Language()
+}
+
+var pageMessage = regexp.MustCompile(`\{\{t:(.*?)\}\}`)
+
+// renderDashboard fills the page in: the base path, the language, the
+// translations the script needs and the messages written in the markup. Every
+// substituted value is escaped for HTML, and the translations travel as JSON in
+// an attribute, so nothing in a catalog can become markup or script.
+func renderDashboard(page, prefix, language string) string {
+	catalog, err := json.Marshal(scriptCatalog(language))
+	if err != nil {
+		catalog = []byte("{}")
+	}
+	page = pageMessage.ReplaceAllStringFunc(page, func(match string) string {
+		return html.EscapeString(i18n.Tr(language, pageMessage.FindStringSubmatch(match)[1])) // i18n:dynamic
+	})
+	return strings.NewReplacer(
+		"{{BASE}}", prefix,
+		"{{LANG}}", html.EscapeString(language),
+		"{{I18N}}", html.EscapeString(string(catalog)),
+	).Replace(page)
+}
+
+var scriptMessage = regexp.MustCompile(`\bt\(\s*'((?:[^'\\]|\\.)*)'`)
+
+// scriptCatalog is the part of a language's catalog the dashboard script asks
+// for. The catalog also holds the help text of the command line, which the
+// browser has no use for.
+func scriptCatalog(language string) map[string]string {
+	script, err := dashboardFiles.ReadFile("ui/assets/app.js")
+	if err != nil {
+		return map[string]string{}
+	}
+	wanted := map[string]bool{}
+	for _, match := range scriptMessage.FindAllStringSubmatch(string(script), -1) {
+		wanted[match[1]] = true
+	}
+	subset := map[string]string{}
+	for message, translated := range i18n.Catalog(language) {
+		if wanted[message] {
+			subset[message] = translated
+		}
+	}
+	return subset
 }

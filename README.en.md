@@ -137,7 +137,7 @@ and, once accepted, resumes so the agent can deliver the file through the
 tunnel. The file is saved in a private local inbox. The server never chooses,
 nor is it told, the absolute destination path on the host.
 
-In the **Server files** section, use **Open content** to review text, code or
+In the **Received files** section, use **Open content** to review text, code or
 tabular files you received, such as `.csv`, `.tsv`, `.sql`, `.json`, `.yaml` and
 source code. **Copy content** copies the text of those files to the clipboard.
 The page is local and private; content is served as plain text, without running
@@ -268,6 +268,18 @@ installed; `--agent` lets you choose one of them.
   them.
 - The remote server must be trusted: it receives the content only after an
   explicit call to an MCP tool.
+
+## Language
+
+By default, command output, `agentclip help` and the Companion page are in
+English. For Brazilian Portuguese set `AGENTCLIP_LANG=pt-BR` (it applies to the
+installers too); the Companion page also accepts `?lang=pt-BR` and follows the
+browser's language. Technical error messages stay in English. See
+[Language](COMMANDS.md#idioma) in the command reference (in Portuguese).
+
+```bash
+AGENTCLIP_LANG=pt-BR agentclip help
+```
 
 ## Documentation
 

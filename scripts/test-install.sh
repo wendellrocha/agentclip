@@ -198,7 +198,16 @@ tar -C "$work/release" -czf "$work/archive.tar.gz" "agentclip_${version}_${os}_$
 if command -v sha256sum >/dev/null 2>&1; then digest="$(sha256sum "$work/archive.tar.gz" | awk '{ print $1 }')"; else digest="$(shasum -a 256 "$work/archive.tar.gz" | awk '{ print $1 }')"; fi
 printf '%s  %s\n' "$digest" "$asset" >"$work/checksums.txt"
 run_install "release before v0.7.1-rc.1 installs with a warning" 0 API_STATUS=404
-expect "  the warning says it predates attestations" grep -q 'anterior aos atestados' "$work/out.log"
+expect "  the warning says it predates attestations" grep -q 'predates build attestations' "$work/out.log"
+
+# The language is chosen by AGENTCLIP_LANG alone: Portuguese only when asked,
+# and English for anything else, including a system locale.
+run_install "the same install in Brazilian Portuguese" 0 API_STATUS=404 AGENTCLIP_LANG=pt-BR
+expect "  the warning is in Portuguese" grep -q 'anterior aos atestados' "$work/out.log"
+expect "  and no English status line is left" sh -c '! grep -q "Downloading AgentClip\|Version found" "$1"' _ "$work/out.log"
+run_install "an unsupported language is English" 0 API_STATUS=404 AGENTCLIP_LANG=fr LANG=pt_BR.UTF-8 LC_ALL=pt_BR.UTF-8
+expect "  the system locale is not consulted" grep -q 'predates build attestations' "$work/out.log"
+expect "  the status lines are English" grep -q 'Downloading AgentClip' "$work/out.log"
 
 # A checksum mismatch is still fatal, before any attestation is consulted.
 printf '%s  %s\n' "0000000000000000000000000000000000000000000000000000000000000000" "$asset" >"$work/checksums.txt"

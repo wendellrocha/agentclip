@@ -33,6 +33,7 @@ import (
 	"github.com/wendellrocha/agentclip/internal/control"
 	"github.com/wendellrocha/agentclip/internal/daemon"
 	"github.com/wendellrocha/agentclip/internal/harness"
+	"github.com/wendellrocha/agentclip/internal/i18n"
 	"github.com/wendellrocha/agentclip/internal/mcpserver"
 	"github.com/wendellrocha/agentclip/internal/release"
 	"github.com/wendellrocha/agentclip/internal/remote"
@@ -55,46 +56,37 @@ type bridgeBootstrap struct {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
+	i18n.Init()
+	arguments := os.Args[1:]
+	table := commandTable()
+	if len(arguments) == 0 {
+		printHelp(os.Stdout, table)
 		return
 	}
-	var err error
-	switch os.Args[1] {
-	case "arm":
-		err = runArm()
-	case "ssh":
-		err = runSSH(os.Args[2:])
-	case "pair":
-		err = runPair(os.Args[2:])
-	case "setup":
-		err = runSetup(os.Args[2:])
-	case "connect":
-		err = runConnect(os.Args[2:])
-	case "disconnect", "uninstall":
-		err = runUninstall(os.Args[2:])
-	case "companion":
-		err = runCompanion(os.Args[2:])
-	case "mcp":
-		err = runMCP()
-	case "harness":
-		err = runHarness(os.Args[2:])
-	case "bridge":
-		err = runBridge()
-	case "doctor":
-		err = runDoctor()
-	case "logs":
-		err = runLogs(os.Args[2:])
-	case "upgrade":
-		err = runUpgrade(os.Args[2:])
-	case "version", "--version", "-v":
-		fmt.Println(buildinfo.Version)
+	switch arguments[0] {
+	case "help", "-h", "--help":
+		if len(arguments) == 1 {
+			printHelp(os.Stdout, table)
+			return
+		}
+		selected, found := findCommand(table, arguments[1])
+		if !found {
+			fmt.Fprintln(os.Stderr, i18n.T("unknown command %q; run \"agentclip help\" to list the commands", arguments[1]))
+			os.Exit(2)
+		}
+		printCommandHelp(os.Stdout, selected)
 		return
-	default:
-		usage()
+	}
+	selected, found := findCommand(table, arguments[0])
+	if !found {
+		fmt.Fprintln(os.Stderr, i18n.T("unknown command %q; run \"agentclip help\" to list the commands", arguments[0]))
 		os.Exit(2)
 	}
-	if err != nil {
+	if wantsHelp(arguments[1:]) {
+		printCommandHelp(os.Stdout, selected)
+		return
+	}
+	if err := selected.run(arguments[1:]); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -119,13 +111,13 @@ func runArm() error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Armed image: %dx%d PNG, expires at %s.\n", image.Width, image.Height, response.ExpiresAt.Local().Format(time.Kitchen))
+		fmt.Println(i18n.T("Armed image: %dx%d PNG, expires at %s.", image.Width, image.Height, response.ExpiresAt.Local().Format(time.Kitchen)))
 		return nil
 	}
 	if _, err := startBridge(&armed); err != nil {
 		return err
 	}
-	fmt.Printf("Armed image: %dx%d PNG, expires in %s.\n", image.Width, image.Height, 90*time.Second)
+	fmt.Println(i18n.T("Armed image: %dx%d PNG, expires in %s.", image.Width, image.Height, 90*time.Second))
 	return nil
 }
 
@@ -251,7 +243,7 @@ func runPair(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Paired profile %q. Start it with: agentclip companion start %s\n", profile.Name, profile.Name)
+	fmt.Println(i18n.T("Paired profile %q. Start it with: agentclip companion start %s", profile.Name, profile.Name))
 	return nil
 }
 
@@ -300,7 +292,7 @@ func runConnect(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Connected %s to profile %q.\n", agents.Display(adapters), profile.Name)
+	fmt.Println(i18n.T("Connected %s to profile %q.", agents.Display(adapters), profile.Name))
 	return nil
 }
 
@@ -328,7 +320,7 @@ func runUninstall(arguments []string) error {
 	if err := remote.LoginForProfile(profile, adapter.RemoveArguments("agentclip-"+profile.Name)...).Run(); err != nil {
 		return fmt.Errorf("remove AgentClip MCP from %s on %s: %w", adapter.DisplayName, profile.Destination, err)
 	}
-	fmt.Printf("Removed the AgentClip MCP entry from %s for profile %q. The harness remains installed.\n", adapter.DisplayName, profile.Name)
+	fmt.Println(i18n.T("Removed the AgentClip MCP entry from %s for profile %q. The harness remains installed.", adapter.DisplayName, profile.Name))
 	return nil
 }
 
@@ -357,7 +349,7 @@ func pairProfileWithIdentity(name, destination string, remotePort int, agent str
 		if err != nil {
 			return companion.Profile{}, err
 		}
-		fmt.Printf("Configured %s on %s.\n", agents.Display(adapters), profile.Destination)
+		fmt.Println(i18n.T("Configured %s on %s.", agents.Display(adapters), profile.Destination))
 	}
 	if err := companion.SaveProfile(profile); err != nil {
 		return companion.Profile{}, err
@@ -430,7 +422,8 @@ func startCompanion(name string, verbose bool) error {
 		state, err := companion.LoadRuntime(name)
 		if err == nil && state.PID == pid && companion.RuntimeHealthy(state) {
 			_ = command.Process.Release()
-			fmt.Printf("Companion %q started. Open: agentclip companion open %s\nLogs: %s\n", name, name, companionLogPath(name))
+			fmt.Println(i18n.T("Companion %q started. Open: agentclip companion open %s", name, name))
+			fmt.Println(i18n.T("Logs: %s", companionLogPath(name)))
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -450,7 +443,7 @@ func companionLogPath(name string) string {
 
 func runLogs(arguments []string) error {
 	if len(arguments) < 1 {
-		return errors.New("usage: agentclip logs <profile> [--export caminho]")
+		return errors.New("usage: agentclip logs <profile> [--export PATH]")
 	}
 	settings := flag.NewFlagSet("logs", flag.ContinueOnError)
 	settings.SetOutput(io.Discard)
@@ -459,7 +452,7 @@ func runLogs(arguments []string) error {
 		return fmt.Errorf("parse logs options: %w", err)
 	}
 	if settings.NArg() != 0 {
-		return errors.New("usage: agentclip logs <profile> [--export caminho]")
+		return errors.New("usage: agentclip logs <profile> [--export PATH]")
 	}
 	if err := companion.RequireLog(arguments[0]); err != nil {
 		return err
@@ -473,7 +466,7 @@ func runLogs(arguments []string) error {
 		if err := logger.Export(*exportPath); err != nil {
 			return err
 		}
-		fmt.Printf("Logs exportados para %s\n", *exportPath)
+		fmt.Println(i18n.T("Log exported to %s", *exportPath))
 		return nil
 	}
 	fmt.Println(logger.Path())
@@ -616,7 +609,7 @@ func stopCompanion(name string) error {
 	if err := companion.StopRuntime(state); err != nil {
 		return fmt.Errorf("stop Companion %q: %w", name, err)
 	}
-	fmt.Printf("Companion %q is stopping.\n", name)
+	fmt.Println(i18n.T("Companion %q is stopping.", name))
 	return nil
 }
 
@@ -647,7 +640,11 @@ func companionInboundAction(name, offerID, action string) error {
 	if err := companion.InboundAction(state, offerID, action); err != nil {
 		return fmt.Errorf("%s inbound offer: %w", action, err)
 	}
-	fmt.Printf("Inbound offer %q %sed.\n", offerID, action)
+	if action == "accept" {
+		fmt.Println(i18n.T("Inbound offer %q accepted.", offerID))
+	} else {
+		fmt.Println(i18n.T("Inbound offer %q rejected.", offerID))
+	}
 	return nil
 }
 
@@ -817,7 +814,7 @@ func runCompanionService(name string, announce bool) error {
 		}, logger)
 	}()
 	if announce {
-		fmt.Printf("Companion %q is running; SSH normally, then ask your agent to inspect the clipboard.\n", profile.Name)
+		fmt.Println(i18n.T("Companion %q is running; SSH normally, then ask your agent to inspect the clipboard.", profile.Name))
 	}
 	var runErr error
 	received := 0
@@ -902,7 +899,7 @@ func runDoctor() error {
 	if err != nil || !control.Healthy(state) {
 		return errors.New("bridge: unavailable (copy an image and run `agentclip arm`)")
 	}
-	fmt.Printf("bridge: healthy at %s (PID %d)\n", state.Address, state.PID)
+	fmt.Println(i18n.T("bridge: healthy at %s (PID %d)", state.Address, state.PID))
 	return nil
 }
 
@@ -989,11 +986,6 @@ func randomPort() (int, error) {
 		return 0, fmt.Errorf("choose remote SSH port: %w", err)
 	}
 	return remotePortMin + int(value.Int64()), nil
-}
-
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: agentclip <command>")
-	fmt.Fprintln(os.Stderr, "commands: arm, ssh, pair, setup, connect, uninstall, companion, logs, mcp, harness, doctor, version")
 }
 
 // How long a start waits for another start of the same profile, and how old a

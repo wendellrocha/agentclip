@@ -46,11 +46,15 @@ type cliResult struct {
 	exitCode       int
 }
 
-func runCLI(t *testing.T, args ...string) cliResult {
+func runCLI(t *testing.T, args ...string) cliResult { return runCLIEnv(t, nil, args...) }
+
+// runCLIEnv runs the binary with extra environment variables, such as the language.
+func runCLIEnv(t *testing.T, env []string, args ...string) cliResult {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, binaryPath, args...)
+	command.Env = append(os.Environ(), env...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
@@ -66,19 +70,85 @@ func runCLI(t *testing.T, args ...string) cliResult {
 	return result
 }
 
-func TestCLIVersionAndUsage(t *testing.T) {
-	if result := runCLI(t, "version"); result.exitCode != 0 || strings.TrimSpace(result.stdout) == "" {
-		t.Fatalf("version = %+v, want the version and exit 0", result)
+func TestCLIVersionAndHelp(t *testing.T) {
+	for _, flag := range []string{"version", "--version", "-v"} {
+		if result := runCLI(t, flag); result.exitCode != 0 || strings.TrimSpace(result.stdout) == "" {
+			t.Fatalf("%s = %+v, want the version and exit 0", flag, result)
+		}
 	}
-	if result := runCLI(t, "--version"); result.exitCode != 0 || strings.TrimSpace(result.stdout) == "" {
-		t.Fatalf("--version = %+v", result)
+	// No command, or a request for help, lists every command on stdout.
+	for _, args := range [][]string{nil, {"help"}, {"-h"}, {"--help"}} {
+		result := runCLI(t, args...)
+		if result.exitCode != 0 || result.stderr != "" {
+			t.Fatalf("agentclip %v = exit %d, stderr %q, want a quiet exit 0", args, result.exitCode, result.stderr)
+		}
+		for _, want := range []string{"Usage:", "agentclip help [command]", "setup", "upgrade", "companion", "Set up a server:", "AGENTCLIP_LANG"} {
+			if !strings.Contains(result.stdout, want) {
+				t.Errorf("agentclip %v does not mention %q:\n%s", args, want, result.stdout)
+			}
+		}
 	}
-	// No command is a request for help; an unknown one is a mistake.
-	if result := runCLI(t); result.exitCode != 0 || !strings.Contains(result.stderr, "usage: agentclip") {
-		t.Fatalf("no arguments = %+v, want usage and exit 0", result)
+	// An unknown command is a mistake: it says so, points at help and exits 2.
+	if result := runCLI(t, "bogus"); result.exitCode != 2 || !strings.Contains(result.stderr, `unknown command "bogus"`) || !strings.Contains(result.stderr, "agentclip help") {
+		t.Fatalf("unknown command = %+v", result)
 	}
-	if result := runCLI(t, "bogus"); result.exitCode != 2 || !strings.Contains(result.stderr, "usage: agentclip") {
-		t.Fatalf("unknown command = %+v, want usage and exit 2", result)
+	if result := runCLI(t, "help", "bogus"); result.exitCode != 2 || !strings.Contains(result.stderr, `unknown command "bogus"`) {
+		t.Fatalf("help for an unknown command = %+v", result)
+	}
+}
+
+// The help of one command gives its syntax and explains it, however it is asked for.
+func TestCLICommandHelp(t *testing.T) {
+	for _, args := range [][]string{{"help", "setup"}, {"setup", "--help"}, {"setup", "-h"}, {"setup", "help"}} {
+		result := runCLI(t, args...)
+		if result.exitCode != 0 || result.stderr != "" {
+			t.Fatalf("agentclip %v = exit %d, stderr %q", args, result.exitCode, result.stderr)
+		}
+		for _, want := range []string{"Usage:", "agentclip setup <ssh-destination>", "--profile NAME", "--no-start", "Install and configure a server in one step"} {
+			if !strings.Contains(result.stdout, want) {
+				t.Errorf("agentclip %v does not mention %q:\n%s", args, want, result.stdout)
+			}
+		}
+	}
+	// An alias reaches the same help, and says it is an alias.
+	if result := runCLI(t, "help", "disconnect"); result.exitCode != 0 || !strings.Contains(result.stdout, "agentclip uninstall <profile>") || !strings.Contains(result.stdout, "Also known as: disconnect") {
+		t.Fatalf("help for an alias = %+v", result)
+	}
+	if result := runCLI(t, "companion", "--help"); result.exitCode != 0 || !strings.Contains(result.stdout, "autostart") || !strings.Contains(result.stdout, "agentclip companion <accept|reject>") {
+		t.Fatalf("companion help = %+v", result)
+	}
+	// Asking for help never runs the command: nothing is created.
+	if result := runCLI(t, "upgrade", "--help"); result.exitCode != 0 || !strings.Contains(result.stdout, "attestation") {
+		t.Fatalf("upgrade help = %+v", result)
+	}
+}
+
+// The language is chosen by AGENTCLIP_LANG alone; anything unknown is English.
+func TestCLISpeaksPortugueseOnlyWhenAsked(t *testing.T) {
+	pt := []string{"AGENTCLIP_LANG=pt-BR"}
+	help := runCLIEnv(t, pt)
+	for _, want := range []string{"Uso:", "Configurar um servidor:", "Atualiza esta máquina", "Defina AGENTCLIP_LANG=en-US"} {
+		if !strings.Contains(help.stdout, want) {
+			t.Errorf("Portuguese help lacks %q:\n%s", want, help.stdout)
+		}
+	}
+	if strings.Contains(help.stdout, "Usage:") {
+		t.Error("Portuguese help still has English headings")
+	}
+	if result := runCLIEnv(t, pt, "help", "setup"); !strings.Contains(result.stdout, "A forma recomendada de configurar um servidor") || !strings.Contains(result.stdout, "--no-start") {
+		t.Fatalf("Portuguese command help = %+v", result)
+	}
+	if result := runCLIEnv(t, pt, "companion", "autostart", "status", "nope"); !strings.Contains(result.stdout, "não sobe quando você entra na sessão") {
+		t.Fatalf("Portuguese command output = %+v", result)
+	}
+	if result := runCLIEnv(t, pt, "bogus"); result.exitCode != 2 || !strings.Contains(result.stderr, `comando desconhecido "bogus"`) {
+		t.Fatalf("Portuguese error = %+v", result)
+	}
+	// The syntax is not translated, and an unsupported or empty value is English.
+	for _, value := range []string{"AGENTCLIP_LANG=fr", "AGENTCLIP_LANG=", "AGENTCLIP_LANG=nonsense"} {
+		if result := runCLIEnv(t, []string{value}); !strings.Contains(result.stdout, "Usage:") {
+			t.Errorf("%s did not give English help:\n%s", value, result.stdout)
+		}
 	}
 }
 

@@ -1,10 +1,12 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="{{LANG}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101214">
   <meta name="agentclip-base" content="{{BASE}}">
+  <meta name="agentclip-lang" content="{{LANG}}">
+  <meta name="agentclip-i18n" content="{{I18N}}">
   <title>AgentClip Companion</title>
   <link rel="icon" type="image/svg+xml" href="{{BASE}}/assets/favicon.svg">
   <link rel="stylesheet" href="{{BASE}}/assets/styles.css">
@@ -14,28 +16,28 @@
     <header class="nav">
       <div class="brand-lockup">
         <span class="brand-mark" aria-hidden="true"><img src="{{BASE}}/assets/agentclip-mark.svg" alt=""></span>
-        <div class="brand-copy"><h1 class="h1">AgentClip Companion</h1><p class="t2">Controle sua conexão e os arquivos compartilhados</p></div>
+        <div class="brand-copy"><h1 class="h1">AgentClip Companion</h1><p class="t2">{{t:Manage your connection and shared files}}</p></div>
       </div>
-      <div class="header-meta"><span class="connection-pill" id="connection">Conectando…</span><span class="updated" id="updated">Carregando…</span></div>
+      <div class="header-meta"><span class="connection-pill" id="connection">{{t:Connecting…}}</span><span class="updated" id="updated">{{t:Loading…}}</span></div>
     </header>
     <div class="dashboard-grid">
-      <aside class="sidebar" aria-label="Status do companion">
+      <aside class="sidebar" aria-label="{{t:Companion status}}">
         <section class="section-card status-section">
-          <div class="section-heading"><div><p class="eyebrow">VISÃO GERAL</p><h2 class="h2">Status do companion</h2></div><span class="live-indicator" id="live-indicator" aria-label="Conectando"></span></div>
+          <div class="section-heading"><div><p class="eyebrow">{{t:OVERVIEW}}</p><h2 class="h2">{{t:Companion status}}</h2></div><span class="live-indicator" id="live-indicator" aria-label="{{t:Connecting}}"></span></div>
           <dl class="status-list" id="status"></dl>
         </section>
         <section class="section-card approval-card">
-          <div class="section-heading"><div><p class="eyebrow">AÇÕES</p><h2 class="h2">Aprovação pendente</h2></div><span class="count-badge" id="offer-count">0</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{{t:ACTIONS}}</p><h2 class="h2">{{t:Pending approval}}</h2></div><span class="count-badge" id="offer-count">0</span></div>
           <div id="offers"></div>
         </section>
-        <section class="section-card stop-card"><div><h2 class="stop-title">Encerrar sessão</h2><p class="muted">Desconecta este companion do servidor.</p></div><button class="btn btn-danger" type="button" id="stop">Parar Companion</button></section>
+        <section class="section-card stop-card"><div><h2 class="stop-title">{{t:End session}}</h2><p class="muted">{{t:Disconnects this Companion from the server.}}</p></div><button class="btn btn-danger" type="button" id="stop">{{t:Stop Companion}}</button></section>
       </aside>
       <section class="files-section" aria-labelledby="files-title">
-        <div class="files-heading"><div><p class="eyebrow">BIBLIOTECA</p><h2 class="h2" id="files-title">Arquivos recebidos</h2><p class="muted">Conteúdos disponíveis neste dispositivo.</p><span class="sr-only">Recebidos recentemente</span></div><span class="files-count"><span class="count-number" id="file-count">0</span> arquivos</span></div>
+        <div class="files-heading"><div><p class="eyebrow">{{t:LIBRARY}}</p><h2 class="h2" id="files-title">{{t:Received files}}</h2><p class="muted">{{t:Content available on this device.}}</p><span class="sr-only">{{t:Recently received}}</span></div><span class="files-count"><span class="count-number" id="file-count">0</span> {{t:files}}</span></div>
         <div class="file-list" id="received"></div>
       </section>
     </div>
-    <footer class="footer"><span>AgentClip Companion</span><span>Conexão protegida <span class="footer-dot"></span></span></footer>
+    <footer class="footer"><span>AgentClip Companion</span><span>{{t:Protected connection}} <span class="footer-dot"></span></span></footer>
   </main>
 <script src="{{BASE}}/assets/app.js"></script>
 </body>

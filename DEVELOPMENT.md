@@ -101,6 +101,29 @@ que ainda estiver rodando tentará abrir novamente o mesmo túnel reverso.
 - `internal/remote`: comandos SSH de preflight, instalação e chave dedicada.
 - `internal/release`, `internal/upgrader`: consulta de releases e atualização.
 
+## Mensagens e idiomas
+
+O inglês (en-US) é o idioma-fonte e o padrão; o português do Brasil (pt-BR) é um
+catálogo em `internal/i18n/catalogs/pt-BR.json`. A mensagem em inglês é a própria
+chave, e o que faltar no catálogo aparece em inglês.
+
+- **CLI**: o que a pessoa lê (ajuda, resultado, status, avisos) passa por
+  `i18n.T("English text %s", arg)`, com um **literal** como primeiro argumento. Os
+  comandos e seus textos de ajuda ficam na tabela de `cmd/agentclip/commands.go`,
+  que também é de onde o `main` despacha.
+- **Página do Companion**: `t('English text')` no `app.js` e `{{t:English text}}`
+  no `index.html`. O servidor envia à página só as traduções que o script usa.
+- **Instaladores**: as tabelas de mensagens no início de `scripts/install.sh` e de
+  `scripts/install.ps1`, escolhidas por `AGENTCLIP_LANG`.
+- **Erros técnicos** ficam em inglês, sem tradução.
+
+Os testes de `internal/i18n` falham se uma mensagem usada não tiver tradução, se
+uma tradução ficar órfã, se uma tradução mudar os verbos de formato (`%s`, `%d`)
+da mensagem ou se um `i18n.T` não receber um literal (a exceção marcada com
+`i18n:dynamic` é a das mensagens escritas no HTML). Ao mudar o texto em inglês de
+uma mensagem, mude a chave no catálogo também. Para um novo idioma, acrescente o
+catálogo, o arquivo embutido, `Supported` e `Languages`.
+
 ## Releases
 
 Uma tag semântica `vX.Y.Z` dispara os workflows de teste e release. A release

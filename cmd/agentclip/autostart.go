@@ -12,6 +12,7 @@ import (
 
 	"github.com/wendellrocha/agentclip/internal/autostart"
 	"github.com/wendellrocha/agentclip/internal/companion"
+	"github.com/wendellrocha/agentclip/internal/i18n"
 )
 
 const autostartUsage = "usage: agentclip companion autostart <enable|disable|status> <profile>"
@@ -37,21 +38,21 @@ func runAutostart(arguments []string, stdout io.Writer) error {
 		if err := runner.Enable(spec); err != nil {
 			return fmt.Errorf("turn on autostart for %q: %w", name, err)
 		}
-		fmt.Fprintf(stdout, "Companion %q will start when you log in. Turn it off with: agentclip companion autostart disable %s\n", name, name)
+		fmt.Fprintln(stdout, i18n.T("Companion %q will start when you log in. Turn it off with: agentclip companion autostart disable %s", name, name))
 	case "disable":
 		if err := runner.Disable(spec); err != nil {
 			return fmt.Errorf("turn off autostart for %q: %w", name, err)
 		}
-		fmt.Fprintf(stdout, "Companion %q will no longer start when you log in. A Companion the service started is stopped; one you started yourself keeps running.\n", name)
+		fmt.Fprintln(stdout, i18n.T("Companion %q will no longer start when you log in. A Companion the service started is stopped; one you started yourself keeps running.", name))
 	case "status":
 		on, err := runner.Enabled(spec)
 		if err != nil {
 			return err
 		}
 		if on {
-			fmt.Fprintf(stdout, "Companion %q starts when you log in.\n", name)
+			fmt.Fprintln(stdout, i18n.T("Companion %q starts when you log in.", name))
 		} else {
-			fmt.Fprintf(stdout, "Companion %q does not start when you log in.\n", name)
+			fmt.Fprintln(stdout, i18n.T("Companion %q does not start when you log in.", name))
 		}
 	default:
 		return errors.New(autostartUsage)

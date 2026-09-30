@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wendellrocha/agentclip/internal/companion"
+	"github.com/wendellrocha/agentclip/internal/i18n"
 	"github.com/wendellrocha/agentclip/internal/release"
 	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
@@ -147,7 +148,7 @@ func EnsureSetupSSHIdentity(destination, profileName, existingIdentityFile strin
 	if err != nil {
 		return "", err
 	}
-	fmt.Printf("Configuring a dedicated AgentClip SSH key for %s (your password may be requested once)...\n", destination)
+	fmt.Println(i18n.T("Configuring a dedicated AgentClip SSH key for %s (your password may be requested once)...", destination))
 	bootstrap := bootstrapSSHKeyCommand(destination, publicKey)
 	bootstrap.Stdin, bootstrap.Stdout, bootstrap.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := bootstrap.Run(); err != nil {
@@ -373,9 +374,9 @@ func InstallVerified(ctx context.Context, destination, identityFile, tag string,
 		if comparison, err := release.Compare(tag, installed); err == nil && comparison <= 0 {
 			if stderr != nil {
 				if comparison == 0 {
-					fmt.Fprintf(stderr, "AgentClip %s is already installed on %s.\n", installed, destination)
+					fmt.Fprintln(stderr, i18n.T("AgentClip %s is already installed on %s.", installed, destination))
 				} else {
-					fmt.Fprintf(stderr, "%s has AgentClip %s, newer than %s; leaving it unchanged.\n", destination, installed, tag)
+					fmt.Fprintln(stderr, i18n.T("%s has AgentClip %s, newer than %s; leaving it unchanged.", destination, installed, tag))
 				}
 			}
 			return false, nil

@@ -11,6 +11,7 @@ import (
 	"io"
 
 	"github.com/wendellrocha/agentclip/internal/companion"
+	"github.com/wendellrocha/agentclip/internal/i18n"
 	"github.com/wendellrocha/agentclip/internal/release"
 	"github.com/wendellrocha/agentclip/internal/upgrader"
 )
@@ -80,7 +81,7 @@ func (r Runner) Run(ctx context.Context) error {
 		return fmt.Errorf("prepare AgentClip %s: %w", tag, err)
 	}
 	if staged.Notice != "" {
-		fmt.Fprintln(stderr, "warning:", staged.Notice)
+		fmt.Fprintln(stderr, i18n.T("warning:"), staged.Notice)
 	}
 	profiles, err := r.Profiles()
 	if err != nil {
@@ -96,7 +97,7 @@ func (r Runner) Run(ctx context.Context) error {
 	}
 	results := make([]RemoteResult, 0, len(profiles))
 	for _, profile := range profiles {
-		fmt.Fprintf(stdout, "Updating %q on %s...\n", profile.Name, profile.Destination)
+		fmt.Fprintln(stdout, i18n.T("Updating %q on %s...", profile.Name, profile.Destination))
 		updated, err := r.InstallRemote(profile, tag)
 		results = append(results, RemoteResult{Profile: profile.Name, Updated: updated, Err: err})
 	}
@@ -115,7 +116,7 @@ func (r Runner) Run(ctx context.Context) error {
 		if HasFailure(results) {
 			return errors.New("one or more remote hosts could not be updated; the local update will finish shortly")
 		}
-		fmt.Fprintf(stdout, "AgentClip %s will replace itself and restart %d Companion(s) shortly.\n", tag, len(active))
+		fmt.Fprintln(stdout, i18n.T("AgentClip %s will replace itself and restart %d Companion(s) shortly.", tag, len(active)))
 		return nil
 	}
 	if err := r.Replace(staged.Path, staged.Target); err != nil {
@@ -131,7 +132,7 @@ func (r Runner) Run(ctx context.Context) error {
 	if HasFailure(results) {
 		return errors.New("one or more remote hosts could not be updated")
 	}
-	fmt.Fprintf(stdout, "AgentClip updated to %s.\n", tag)
+	fmt.Fprintln(stdout, i18n.T("AgentClip updated to %s.", tag))
 	return nil
 }
 
@@ -153,7 +154,7 @@ func (r Runner) updateServersOnly(tag string, stdout io.Writer) error {
 	}
 	results := make([]RemoteResult, 0, len(profiles))
 	for _, profile := range profiles {
-		fmt.Fprintf(stdout, "Updating %q on %s...\n", profile.Name, profile.Destination)
+		fmt.Fprintln(stdout, i18n.T("Updating %q on %s...", profile.Name, profile.Destination))
 		updated, err := r.InstallRemote(profile, tag)
 		results = append(results, RemoteResult{Profile: profile.Name, Updated: updated, Err: err})
 	}
@@ -161,25 +162,25 @@ func (r Runner) updateServersOnly(tag string, stdout io.Writer) error {
 	if HasFailure(results) {
 		return errors.New("one or more remote hosts could not be updated")
 	}
-	fmt.Fprintf(stdout, "AgentClip is already up to date (%s).\n", r.CurrentVersion)
+	fmt.Fprintln(stdout, i18n.T("AgentClip is already up to date (%s).", r.CurrentVersion))
 	return nil
 }
 
 // PrintSummary lists how each saved server fared.
 func PrintSummary(w io.Writer, results []RemoteResult) {
 	if len(results) == 0 {
-		fmt.Fprintln(w, "No remote profiles configured.")
+		fmt.Fprintln(w, i18n.T("No remote profiles configured."))
 		return
 	}
-	fmt.Fprintln(w, "Remote update summary:")
+	fmt.Fprintln(w, i18n.T("Remote update summary:"))
 	for _, result := range results {
 		switch {
 		case result.Err == nil && result.Updated:
-			fmt.Fprintf(w, "  %s: updated\n", result.Profile)
+			fmt.Fprintf(w, "  %s: %s\n", result.Profile, i18n.T("updated"))
 		case result.Err == nil:
-			fmt.Fprintf(w, "  %s: already up to date\n", result.Profile)
+			fmt.Fprintf(w, "  %s: %s\n", result.Profile, i18n.T("already up to date"))
 		default:
-			fmt.Fprintf(w, "  %s: failed (%v)\n", result.Profile, result.Err)
+			fmt.Fprintf(w, "  %s: %s\n", result.Profile, i18n.T("failed (%v)", result.Err))
 		}
 	}
 }
