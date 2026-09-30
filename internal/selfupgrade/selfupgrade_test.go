@@ -428,3 +428,65 @@ func TestUpgradeOfAnUpToDateMachineStillReportsServerFailuresAndProfileErrors(t 
 		t.Fatalf("err = %v, want the profile error", err)
 	}
 }
+
+// The output tells the order things happen in: this machine's binary is
+// downloaded first (and slowly, so it is announced), the servers follow, and only
+// then does this machine change and its Companions restart.
+func TestUpgradeAnnouncesEachStageInTheOrderItHappens(t *testing.T) {
+	h := newHarness(t)
+	h.profiles = []companion.Profile{profile("m2"), profile("vortx")}
+	h.active = []string{"vortx"}
+	if err := h.run(); err != nil {
+		t.Fatal(err)
+	}
+	out := h.stdout.String()
+	order := []string{
+		"Downloading and verifying AgentClip v9.9.9 for this machine...",
+		`Updating "m2" on m2-host...`,
+		`Updating "vortx" on vortx-host...`,
+		"Replacing this machine's executable...",
+		"Restarting 1 Companion(s)...",
+		"Remote update summary:",
+		"AgentClip updated to v9.9.9.",
+	}
+	previous := -1
+	for _, want := range order {
+		at := strings.Index(out, want)
+		if at < 0 {
+			t.Fatalf("the output lacks %q:\n%s", want, out)
+		}
+		if at < previous {
+			t.Fatalf("%q comes out of order:\n%s", want, out)
+		}
+		previous = at
+	}
+}
+
+func TestUpgradeSaysNothingAboutRestartingWhenNoCompanionWasRunning(t *testing.T) {
+	h := newHarness(t)
+	h.profiles = []companion.Profile{profile("m2")}
+	if err := h.run(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(h.stdout.String(), "Restarting") {
+		t.Errorf("announced a restart with nothing to restart:\n%s", h.stdout.String())
+	}
+	if !strings.Contains(h.stdout.String(), "Replacing this machine's executable...") {
+		t.Errorf("the replacement was not announced:\n%s", h.stdout.String())
+	}
+}
+
+// A machine that is already current downloads and replaces nothing, and says nothing about it.
+func TestUpgradeOfACurrentMachineDoesNotAnnounceWhatItDoesNotDo(t *testing.T) {
+	h := newHarness(t)
+	h.runner.CurrentVersion = "v9.9.9"
+	h.profiles = []companion.Profile{profile("m2")}
+	if err := h.run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{"Downloading and verifying", "Replacing this machine", "Restarting"} {
+		if strings.Contains(h.stdout.String(), unwanted) {
+			t.Errorf("announced %q although nothing of the kind happened:\n%s", unwanted, h.stdout.String())
+		}
+	}
+}

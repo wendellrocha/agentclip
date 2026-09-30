@@ -147,6 +147,13 @@ esteja lá não é substituída. Uma falha em um servidor não impede as
 tentativas nos demais nem a atualização local; o resumo final identifica cada
 perfil que falhou.
 
+A ordem é: baixar e verificar o binário desta máquina (a etapa mais lenta, que a
+saída anuncia), atualizar cada servidor, e só então parar os Companions em
+execução, trocar o executável local e reiniciar esses Companions. A troca local
+fica por último porque é a única parte difícil de desfazer: se algo falhar antes
+dela, esta máquina fica como estava, e os túneis seguem no ar durante o trabalho
+nos servidores.
+
 Se esta máquina já está na release mais recente, nada é baixado, trocado ou
 reiniciado aqui: o comando só atualiza os servidores que ainda estiverem
 atrás, e o resumo distingue `updated` de `already up to date`.
