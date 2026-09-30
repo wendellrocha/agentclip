@@ -76,6 +76,10 @@ func (r Runner) Run(ctx context.Context) error {
 	if r.localIsCurrent(tag) {
 		return r.updateServersOnly(tag, stdout)
 	}
+	// Downloading and verifying this machine's binary comes first and takes a
+	// while, so it is announced: without a line here the output would seem to
+	// start with the servers.
+	fmt.Fprintln(stdout, i18n.T("Downloading and verifying AgentClip %s for this machine...", tag))
 	staged, err := r.Prepare(ctx, tag, executable)
 	if err != nil {
 		return fmt.Errorf("prepare AgentClip %s: %w", tag, err)
@@ -101,6 +105,11 @@ func (r Runner) Run(ctx context.Context) error {
 		updated, err := r.InstallRemote(profile, tag)
 		results = append(results, RemoteResult{Profile: profile.Name, Updated: updated, Err: err})
 	}
+	if r.GOOS != "windows" {
+		// The servers are done; only now does this machine change, which is why it
+		// comes last: a failure before this point leaves it as it was found.
+		fmt.Fprintln(stdout, i18n.T("Replacing this machine's executable..."))
+	}
 	if err := r.StopCompanions(active); err != nil {
 		staged.Cleanup()
 		_ = r.RestartCompanions(active)
@@ -123,6 +132,9 @@ func (r Runner) Run(ctx context.Context) error {
 		staged.Cleanup()
 		_ = r.RestartCompanions(active)
 		return fmt.Errorf("replace AgentClip executable: %w", err)
+	}
+	if len(active) > 0 {
+		fmt.Fprintln(stdout, i18n.T("Restarting %d Companion(s)...", len(active)))
 	}
 	if err := r.RestartCompanions(active); err != nil {
 		PrintSummary(stdout, results)
