@@ -151,6 +151,13 @@ Invoke-Scenario "an unsupported language is English" $true { $script:apiMode = "
 Assert-That "  the warning is English" ($script:lastMessages -like "*predates build attestations*")
 Remove-Item Env:AGENTCLIP_LANG
 
+# The PATH line is only reached by a real install, which changes the user's PATH,
+# so the message itself is checked in both languages instead.
+Assert-That "  the PATH message is English by default" ((Get-AgentClipMessage "added_to_path" @("C:\Tools")) -eq "Added C:\Tools to your user PATH. Open a new terminal after installation.")
+$env:AGENTCLIP_LANG = "pt_BR.UTF-8"
+Assert-That "  the PATH message is Portuguese on request" ((Get-AgentClipMessage "added_to_path" @("C:\Tools")) -like "C:\Tools foi adicionado ao PATH*")
+Remove-Item Env:AGENTCLIP_LANG
+
 Remove-Item -Recurse -Force $work
 Write-Output ""
 if ($script:failures -ne 0) { Write-Error "$($script:failures) check(s) failed"; exit 1 }

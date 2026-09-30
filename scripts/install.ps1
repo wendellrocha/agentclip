@@ -28,6 +28,7 @@ $messages = @{
     "downloading"            = @("Downloading AgentClip {0} for windows/{1}...", "Baixando AgentClip {0} para windows/{1}...")
     "updated"                = @("AgentClip updated: {0} → {1}.", "AgentClip atualizado: {0} → {1}.")
     "installed"              = @("AgentClip installed: {0}.", "AgentClip instalado: {0}.")
+    "added_to_path"          = @("Added {0} to your user PATH. Open a new terminal after installation.", "{0} foi adicionado ao PATH do seu usuário. Abra um novo terminal depois da instalação.")
     "binary_at"              = @("Binary available at {0}", "Binário disponível em {0}")
 }
 
@@ -332,7 +333,7 @@ try {
     if (($userPath -split ';') -notcontains $InstallDir) {
         [Environment]::SetEnvironmentVariable("Path", (($userPath.TrimEnd(';') + ";" + $InstallDir).TrimStart(';')), "User")
         $env:Path = "$InstallDir;$env:Path"
-        Write-Host "Added $InstallDir to your user PATH. Open a new terminal after installation."
+        Write-Host (Get-AgentClipMessage "added_to_path" @($InstallDir))
     }
 }
 finally {

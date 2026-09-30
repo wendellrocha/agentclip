@@ -55,6 +55,8 @@ say() {
     pt:full_verification_hint) message_format='Para a verificação criptográfica completa, instale o gh e use gh attestation verify.' ;;
     en:cannot_compare) message_format='Could not compare the versions %s and %s.' ;;
     pt:cannot_compare) message_format='Não foi possível comparar as versões %s e %s.' ;;
+    en:add_to_path) message_format='Add %s to PATH, then open a new terminal.' ;;
+    pt:add_to_path) message_format='Adicione %s ao PATH e abra um novo terminal.' ;;
     en:binary_at) message_format='Binary available at %s' ;;
     pt:binary_at) message_format='Binário disponível em %s' ;;
     *) message_format="$message_key" ;;
@@ -392,6 +394,6 @@ say binary_at "${install_dir}/agentclip"
 case ":$PATH:" in
   *":$install_dir:"*) ;;
   *)
-    echo "Add ${install_dir} to PATH, then open a new terminal."
+    say add_to_path "$install_dir"
     ;;
 esac

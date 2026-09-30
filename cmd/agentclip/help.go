@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/wendellrocha/agentclip/internal/buildinfo"
@@ -66,6 +67,31 @@ func printCommandHelp(w io.Writer, c command) {
 		fmt.Fprintf(w, "\n%s %s\n", i18n.T("Also known as:"), strings.Join(c.aliases, ", "))
 	}
 	fmt.Fprintf(w, "\n%s\n", c.details)
+}
+
+// usageError is a mistake in how the command line was written, which exits with
+// status 2 instead of the 1 of a command that failed.
+type usageError struct{ message string }
+
+func (e usageError) Error() string { return e.message }
+
+func unknownCommand(name string) usageError {
+	return usageError{i18n.T("unknown command %q; run \"agentclip help\" to list the commands", name)}
+}
+
+// runHelp is the help command: the overview, or the help of one command.
+func runHelp(arguments []string) error {
+	table := commandTable()
+	if len(arguments) == 0 {
+		printHelp(os.Stdout, table)
+		return nil
+	}
+	selected, found := findCommand(table, arguments[0])
+	if !found {
+		return unknownCommand(arguments[0])
+	}
+	printCommandHelp(os.Stdout, selected)
+	return nil
 }
 
 // wantsHelp reports whether the arguments after a command ask for its help.

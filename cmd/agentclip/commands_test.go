@@ -19,10 +19,15 @@ func TestCommandTableIsConsistent(t *testing.T) {
 		if c.run == nil || strings.TrimSpace(c.summary) == "" || strings.TrimSpace(c.details) == "" || len(c.usage) == 0 {
 			t.Errorf("command %q is missing its handler, summary, details or usage", c.name)
 		}
+		named := false
 		for _, line := range c.usage {
-			if !strings.HasPrefix(line, "agentclip "+c.name) {
-				t.Errorf("usage %q of %q does not start with the command", line, c.name)
+			if !strings.HasPrefix(line, "agentclip ") {
+				t.Errorf("usage %q of %q does not start with agentclip", line, c.name)
 			}
+			named = named || strings.HasPrefix(line, "agentclip "+c.name)
+		}
+		if !named {
+			t.Errorf("no usage line of %q starts with its own name", c.name)
 		}
 		known := false
 		for _, group := range groupOrder {
@@ -33,7 +38,7 @@ func TestCommandTableIsConsistent(t *testing.T) {
 		}
 	}
 	// Everything that worked before the table still does.
-	for _, name := range []string{"arm", "ssh", "pair", "setup", "connect", "uninstall", "disconnect", "companion", "mcp", "harness", "bridge", "doctor", "logs", "upgrade", "version", "--version", "-v"} {
+	for _, name := range []string{"arm", "ssh", "pair", "setup", "connect", "uninstall", "disconnect", "companion", "mcp", "harness", "bridge", "doctor", "logs", "upgrade", "help", "-h", "--help", "version", "--version", "-v"} {
 		if _, ok := findCommand(commandTable(), name); !ok {
 			t.Errorf("the command %q is gone", name)
 		}

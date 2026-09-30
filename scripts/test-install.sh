@@ -204,10 +204,12 @@ expect "  the warning says it predates attestations" grep -q 'predates build att
 # and English for anything else, including a system locale.
 run_install "the same install in Brazilian Portuguese" 0 API_STATUS=404 AGENTCLIP_LANG=pt-BR
 expect "  the warning is in Portuguese" grep -q 'anterior aos atestados' "$work/out.log"
-expect "  and no English status line is left" sh -c '! grep -q "Downloading AgentClip\|Version found" "$1"' _ "$work/out.log"
+expect "  the PATH instruction is in Portuguese" grep -q 'ao PATH e abra um novo terminal' "$work/out.log"
+expect "  and no English status line is left" sh -c '! grep -q "Downloading AgentClip\|Version found\|Binary available\|to PATH\|Installed version\|predates" "$1"' _ "$work/out.log"
 run_install "an unsupported language is English" 0 API_STATUS=404 AGENTCLIP_LANG=fr LANG=pt_BR.UTF-8 LC_ALL=pt_BR.UTF-8
 expect "  the system locale is not consulted" grep -q 'predates build attestations' "$work/out.log"
 expect "  the status lines are English" grep -q 'Downloading AgentClip' "$work/out.log"
+expect "  the PATH instruction is English" grep -q 'to PATH, then open a new terminal' "$work/out.log"
 
 # A checksum mismatch is still fatal, before any attestation is consulted.
 printf '%s  %s\n' "0000000000000000000000000000000000000000000000000000000000000000" "$asset" >"$work/checksums.txt"

@@ -63,30 +63,22 @@ func main() {
 		printHelp(os.Stdout, table)
 		return
 	}
-	switch arguments[0] {
-	case "help", "-h", "--help":
-		if len(arguments) == 1 {
-			printHelp(os.Stdout, table)
-			return
-		}
-		selected, found := findCommand(table, arguments[1])
-		if !found {
-			fmt.Fprintln(os.Stderr, i18n.T("unknown command %q; run \"agentclip help\" to list the commands", arguments[1]))
-			os.Exit(2)
-		}
-		printCommandHelp(os.Stdout, selected)
-		return
-	}
 	selected, found := findCommand(table, arguments[0])
 	if !found {
-		fmt.Fprintln(os.Stderr, i18n.T("unknown command %q; run \"agentclip help\" to list the commands", arguments[0]))
+		fmt.Fprintln(os.Stderr, unknownCommand(arguments[0]))
 		os.Exit(2)
 	}
-	if wantsHelp(arguments[1:]) {
+	// Asking a command for help never runs it.
+	if selected.name != "help" && wantsHelp(arguments[1:]) {
 		printCommandHelp(os.Stdout, selected)
 		return
 	}
 	if err := selected.run(arguments[1:]); err != nil {
+		var mistake usageError
+		if errors.As(err, &mistake) {
+			fmt.Fprintln(os.Stderr, mistake)
+			os.Exit(2)
+		}
 		log.Fatal(err)
 	}
 }
