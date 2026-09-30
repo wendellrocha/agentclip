@@ -134,12 +134,13 @@ por até 10 minutos e, no aceite, retoma o fluxo para que o agente entregue o
 arquivo pelo túnel. O arquivo é salvo numa inbox privada local. O servidor
 nunca escolhe nem recebe o caminho absoluto de destino no host.
 
-Na seção **Arquivos do servidor**, use **Abrir conteúdo** para revisar no
+Na seção **Arquivos recebidos** (*Received files*; a página está em inglês por
+padrão, veja [Idioma](#idioma)), use **Abrir conteúdo** (*Open content*) para revisar no
 navegador arquivos recebidos de texto, código ou dados tabulares, como `.csv`,
-`.tsv`, `.sql`, `.json`, `.yaml` e arquivos de código. **Copiar conteúdo** copia
+`.tsv`, `.sql`, `.json`, `.yaml` e arquivos de código. **Copiar conteúdo** (*Copy content*) copia
 o texto desses arquivos para a área de transferência. A página é local e
 privada; o conteúdo é servido como texto simples, sem executar HTML. Formatos
-binários, como `.xlsx` e imagens, exibem **Baixar** e **Copiar caminho**, mas
+binários, como `.xlsx` e imagens, exibem **Baixar** (*Download*) e **Copiar caminho** (*Copy path*), mas
 não as ações de conteúdo de texto.
 
 Após atualizar para uma versão com esse recurso, refaça o pareamento do perfil
@@ -266,6 +267,18 @@ instalados; `--agent` permite escolher um deles.
   os arquivos entregues ficam nessa pasta até você apagá-los.
 - O servidor remoto precisa ser confiável: ele recebe o conteúdo somente após
   uma chamada explícita da ferramenta MCP.
+
+## Idioma
+
+Por padrão, a saída dos comandos, o `agentclip help` e a página do Companion
+estão em inglês. Para português do Brasil, defina `AGENTCLIP_LANG=pt-BR` (vale
+também para os instaladores); a página do Companion também aceita `?lang=pt-BR`
+e segue o idioma do navegador. As mensagens de erro técnicas continuam em
+inglês. Veja [Idioma](COMMANDS.md#idioma) na referência de comandos.
+
+```bash
+AGENTCLIP_LANG=pt-BR agentclip help
+```
 
 ## Documentação
 

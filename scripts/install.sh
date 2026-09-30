@@ -6,6 +6,63 @@ repository="${AGENTCLIP_REPOSITORY:-wendellrocha/agentclip}"
 install_dir="${AGENTCLIP_INSTALL_DIR:-$HOME/.local/bin}"
 requested_version="${AGENTCLIP_VERSION:-latest}"
 
+# Messages are English unless AGENTCLIP_LANG asks for Brazilian Portuguese
+# (pt, pt-BR, pt_BR.UTF-8, ...). Errors stay in English on purpose.
+case "$(printf '%s' "${AGENTCLIP_LANG:-}" | tr 'A-Z_' 'a-z-')" in
+  pt | pt-*) message_language=pt ;;
+  *) message_language=en ;;
+esac
+
+say() {
+  message_key="$1"
+  shift
+  case "$message_language:$message_key" in
+    en:verifying_gh) message_format='Verifying authenticity with gh attestation verify...' ;;
+    pt:verifying_gh) message_format='Verificando a autenticidade com gh attestation verify...' ;;
+    en:verifying_api) message_format='Verifying authenticity with the GitHub attestations API...' ;;
+    pt:verifying_api) message_format='Verificando a autenticidade na API de atestados do GitHub...' ;;
+    en:authentic_gh) message_format='Authenticity confirmed by gh attestation verify.' ;;
+    pt:authentic_gh) message_format='Autenticidade confirmada por gh attestation verify.' ;;
+    en:authentic_api) message_format='Authenticity confirmed by the GitHub attestations API.' ;;
+    pt:authentic_api) message_format='Autenticidade confirmada pela API de atestados do GitHub.' ;;
+    en:looking_up_latest) message_format='Looking up the latest AgentClip version...' ;;
+    pt:looking_up_latest) message_format='Buscando a versão mais recente do AgentClip...' ;;
+    en:requested_version) message_format='Requested version: %s' ;;
+    pt:requested_version) message_format='Versão solicitada: %s' ;;
+    en:found_version) message_format='Version found: %s' ;;
+    pt:found_version) message_format='Versão encontrada: %s' ;;
+    en:installed_version) message_format='Installed version found: %s' ;;
+    pt:installed_version) message_format='Versão instalada encontrada: %s' ;;
+    en:up_to_date) message_format='AgentClip %s is already up to date. No download needed.' ;;
+    pt:up_to_date) message_format='AgentClip %s já está atualizado. Nenhum download necessário.' ;;
+    en:installed_is_newer) message_format='The installed version (%s) is newer than %s. Nothing was changed.' ;;
+    pt:installed_is_newer) message_format='A versão instalada (%s) é mais nova que %s. Nenhuma alteração realizada.' ;;
+    en:update_available) message_format='New version available: %s (current: %s).' ;;
+    pt:update_available) message_format='Nova versão disponível: %s (atual: %s).' ;;
+    en:no_valid_install) message_format='No valid installation was found at %s.' ;;
+    pt:no_valid_install) message_format='Nenhuma instalação válida foi encontrada em %s.' ;;
+    en:downloading) message_format='Downloading AgentClip %s for %s/%s...' ;;
+    pt:downloading) message_format='Baixando AgentClip %s para %s/%s...' ;;
+    en:updated) message_format='AgentClip updated: %s → %s.' ;;
+    pt:updated) message_format='AgentClip atualizado: %s → %s.' ;;
+    en:installed) message_format='AgentClip installed: %s.' ;;
+    pt:installed) message_format='AgentClip instalado: %s.' ;;
+    en:skip_warning) message_format='Warning: attestation check skipped (AGENTCLIP_SKIP_ATTESTATION=1); only the SHA-256 was checked.' ;;
+    pt:skip_warning) message_format='Aviso: verificação de atestado ignorada (AGENTCLIP_SKIP_ATTESTATION=1); apenas o SHA-256 foi conferido.' ;;
+    en:old_release_warning) message_format='Warning: %s predates build attestations; only the SHA-256 was checked.' ;;
+    pt:old_release_warning) message_format='Aviso: %s é anterior aos atestados de build; apenas o SHA-256 foi conferido.' ;;
+    en:full_verification_hint) message_format='For full cryptographic verification, install gh and use gh attestation verify.' ;;
+    pt:full_verification_hint) message_format='Para a verificação criptográfica completa, instale o gh e use gh attestation verify.' ;;
+    en:cannot_compare) message_format='Could not compare the versions %s and %s.' ;;
+    pt:cannot_compare) message_format='Não foi possível comparar as versões %s e %s.' ;;
+    en:binary_at) message_format='Binary available at %s' ;;
+    pt:binary_at) message_format='Binário disponível em %s' ;;
+    *) message_format="$message_key" ;;
+  esac
+  # shellcheck disable=SC2059 # the format comes from the table above
+  printf "$message_format\n" "$@"
+}
+
 usage() {
   cat <<'EOF'
 Usage: install.sh [--version vX.Y.Z] [--install-dir PATH]
@@ -135,7 +192,7 @@ verify_with_gh() {
   command -v gh >/dev/null 2>&1 || return 2
   gh attestation verify --help >/dev/null 2>&1 || return 2
   curl -fsSL --retry 3 -o "$temporary_directory/attestation.jsonl" "$base_url/attestation.jsonl" 2>/dev/null || return 2
-  echo "Verificando a autenticidade com gh attestation verify..."
+  say verifying_gh
   gh attestation verify "$temporary_directory/$asset" \
     --bundle "$temporary_directory/attestation.jsonl" \
     --repo "$repository" \
@@ -143,7 +200,7 @@ verify_with_gh() {
 }
 
 verify_with_api() {
-  echo "Verificando a autenticidade na API de atestados do GitHub..."
+  say verifying_api
   api_status="$(curl -sS -o "$temporary_directory/attestations.json" -w '%{http_code}' \
     -H "Accept: application/vnd.github+json" -H "User-Agent: agentclip-installer" \
     "https://api.github.com/repos/${repository}/attestations/sha256:${actual_checksum}")" || {
@@ -174,17 +231,17 @@ verify_with_api() {
 
 verify_authenticity() {
   if [ "${AGENTCLIP_SKIP_ATTESTATION:-}" = "1" ]; then
-    echo "Aviso: verificação de atestado ignorada (AGENTCLIP_SKIP_ATTESTATION=1); apenas o SHA-256 foi conferido." >&2
+    say skip_warning >&2
     return 0
   fi
   if [ "$(version_compare "$requested_version" "$attestation_min_version")" = "-1" ]; then
-    echo "Aviso: ${requested_version} é anterior aos atestados de build; apenas o SHA-256 foi conferido." >&2
+    say old_release_warning "$requested_version" >&2
     return 0
   fi
   verify_with_gh
   case "$?" in
     0)
-      echo "Autenticidade confirmada por gh attestation verify."
+      say authentic_gh
       return 0
       ;;
     1)
@@ -195,8 +252,8 @@ verify_authenticity() {
   verify_with_api
   case "$?" in
     0)
-      echo "Autenticidade confirmada pela API de atestados do GitHub."
-      echo "Para a verificação criptográfica completa, instale o gh e use gh attestation verify."
+      say authentic_api
+      say full_verification_hint
       return 0
       ;;
     1) return 1 ;;
@@ -229,12 +286,12 @@ case "$(uname -m)" in
 esac
 
 if [ "$requested_version" = "latest" ]; then
-  echo "Buscando a versão mais recente do AgentClip..."
+  say looking_up_latest
   requested_version="$(curl -fsSL -H "User-Agent: agentclip-installer" "https://api.github.com/repos/${repository}/releases/latest" \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n 1)"
 else
-  echo "Versão solicitada: ${requested_version}"
+  say requested_version "$requested_version"
 fi
 
 case "$requested_version" in
@@ -245,7 +302,7 @@ case "$requested_version" in
     ;;
 esac
 
-echo "Versão encontrada: ${requested_version}"
+say found_version "$requested_version"
 
 installed_binary="$install_dir/agentclip"
 installed_version=""
@@ -259,27 +316,27 @@ if [ -x "$installed_binary" ]; then
 fi
 
 if [ -n "$installed_version" ]; then
-  echo "Versão instalada encontrada: ${installed_version}"
+  say installed_version "$installed_version"
   comparison="$(version_compare "$requested_version" "$installed_version")"
   case "$comparison" in
     0)
-      echo "AgentClip ${installed_version} já está atualizado. Nenhum download necessário."
+      say up_to_date "$installed_version"
       exit 0
       ;;
     -1)
-      echo "A versão instalada (${installed_version}) é mais nova que ${requested_version}. Nenhuma alteração realizada."
+      say installed_is_newer "$installed_version" "$requested_version"
       exit 0
       ;;
     1)
-      echo "Nova versão disponível: ${requested_version} (atual: ${installed_version})."
+      say update_available "$requested_version" "$installed_version"
       ;;
     *)
-      echo "Não foi possível comparar as versões ${installed_version} e ${requested_version}." >&2
+      say cannot_compare "$installed_version" "$requested_version" >&2
       exit 1
       ;;
   esac
 else
-  echo "Nenhuma instalação válida foi encontrada em ${installed_binary}."
+  say no_valid_install "$installed_binary"
 fi
 
 asset="agentclip_${requested_version}_${os}_${arch}.tar.gz"
@@ -287,7 +344,7 @@ base_url="https://github.com/${repository}/releases/download/${requested_version
 temporary_directory="$(mktemp -d)"
 trap 'rm -rf "$temporary_directory"' EXIT HUP INT TERM
 
-echo "Baixando AgentClip ${requested_version} para ${os}/${arch}..."
+say downloading "$requested_version" "$os" "$arch"
 curl -fsSL --retry 3 -o "$temporary_directory/$asset" "$base_url/$asset"
 curl -fsSL --retry 3 -o "$temporary_directory/checksums.txt" "$base_url/checksums.txt"
 
@@ -326,11 +383,11 @@ fi
 mkdir -p "$install_dir"
 install -m 0755 "$binary" "$install_dir/agentclip"
 if [ -n "$installed_version" ]; then
-  echo "AgentClip atualizado: ${installed_version} → ${requested_version}."
+  say updated "$installed_version" "$requested_version"
 else
-  echo "AgentClip instalado: ${requested_version}."
+  say installed "$requested_version"
 fi
-echo "Binário disponível em ${install_dir}/agentclip"
+say binary_at "${install_dir}/agentclip"
 
 case ":$PATH:" in
   *":$install_dir:"*) ;;

@@ -7,6 +7,36 @@ param(
 $ErrorActionPreference = "Stop"
 $repository = if ($env:AGENTCLIP_REPOSITORY) { $env:AGENTCLIP_REPOSITORY } else { "wendellrocha/agentclip" }
 
+# Messages are English unless AGENTCLIP_LANG asks for Brazilian Portuguese (pt,
+# pt-BR, pt_BR.UTF-8, ...). Errors stay in English on purpose.
+$messages = @{
+    "verifying_gh"           = @("Verifying authenticity with gh attestation verify...", "Verificando a autenticidade com gh attestation verify...")
+    "verifying_api"          = @("Verifying authenticity with the GitHub attestations API...", "Verificando a autenticidade na API de atestados do GitHub...")
+    "authentic_gh"           = @("Authenticity confirmed by gh attestation verify.", "Autenticidade confirmada por gh attestation verify.")
+    "authentic_api"          = @("Authenticity confirmed by the GitHub attestations API.", "Autenticidade confirmada pela API de atestados do GitHub.")
+    "skip_warning"           = @("Warning: attestation check skipped (AGENTCLIP_SKIP_ATTESTATION=1); only the SHA-256 was checked.", "Aviso: verificação de atestado ignorada (AGENTCLIP_SKIP_ATTESTATION=1); apenas o SHA-256 foi conferido.")
+    "old_release_warning"    = @("Warning: {0} predates build attestations; only the SHA-256 was checked.", "Aviso: {0} é anterior aos atestados de build; apenas o SHA-256 foi conferido.")
+    "full_verification_hint" = @("For full cryptographic verification, install gh and use gh attestation verify.", "Para a verificação criptográfica completa, instale o gh e use gh attestation verify.")
+    "looking_up_latest"      = @("Looking up the latest AgentClip version...", "Buscando a versão mais recente do AgentClip...")
+    "requested_version"      = @("Requested version: {0}", "Versão solicitada: {0}")
+    "found_version"          = @("Version found: {0}", "Versão encontrada: {0}")
+    "installed_version"      = @("Installed version found: {0}", "Versão instalada encontrada: {0}")
+    "up_to_date"             = @("AgentClip {0} is already up to date. No download needed.", "AgentClip {0} já está atualizado. Nenhum download necessário.")
+    "installed_is_newer"     = @("The installed version ({0}) is newer than {1}. Nothing was changed.", "A versão instalada ({0}) é mais nova que {1}. Nenhuma alteração realizada.")
+    "update_available"       = @("New version available: {0} (current: {1}).", "Nova versão disponível: {0} (atual: {1}).")
+    "no_valid_install"       = @("No valid installation was found at {0}.", "Nenhuma instalação válida foi encontrada em {0}.")
+    "downloading"            = @("Downloading AgentClip {0} for windows/{1}...", "Baixando AgentClip {0} para windows/{1}...")
+    "updated"                = @("AgentClip updated: {0} → {1}.", "AgentClip atualizado: {0} → {1}.")
+    "installed"              = @("AgentClip installed: {0}.", "AgentClip instalado: {0}.")
+    "binary_at"              = @("Binary available at {0}", "Binário disponível em {0}")
+}
+
+function Get-AgentClipMessage {
+    param([Parameter(Mandatory = $true)][string]$Key, [object[]]$Arguments = @())
+    $index = if ("$($env:AGENTCLIP_LANG)".Trim().ToLowerInvariant() -match '^pt([-_.@]|$)') { 1 } else { 0 }
+    return [string]::Format($messages[$Key][$index], $Arguments)
+}
+
 function Get-AgentClipVersionParts {
     param([Parameter(Mandatory = $true)][string]$Value)
 
@@ -108,7 +138,7 @@ function Test-AgentClipWithGh {
         if ($LASTEXITCODE -ne 0) { return 2 }
         $bundle = Join-Path (Split-Path -Parent $Archive) "attestation.jsonl"
         try { Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/attestation.jsonl" -OutFile $bundle } catch { return 2 }
-        Write-Host "Verificando a autenticidade com gh attestation verify..."
+        Write-Host (Get-AgentClipMessage "verifying_gh")
         $identity = "https://github.com/$Repository/.github/workflows/release.yml@refs/tags/$Version"
         $output = & gh attestation verify $Archive --bundle $bundle --repo $Repository --cert-identity $identity 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0) { return 0 }
@@ -128,7 +158,7 @@ function Test-AgentClipWithApi {
         [Parameter(Mandatory = $true)][string]$Version
     )
 
-    Write-Host "Verificando a autenticidade na API de atestados do GitHub..."
+    Write-Host (Get-AgentClipMessage "verifying_api")
     try {
         $response = Invoke-RestMethod -Headers @{ "User-Agent" = "agentclip-installer"; "Accept" = "application/vnd.github+json" } `
             -Uri "https://api.github.com/repos/$Repository/attestations/sha256:$Digest"
@@ -170,16 +200,16 @@ function Confirm-AgentClipAuthenticity {
     )
 
     if ($env:AGENTCLIP_SKIP_ATTESTATION -eq "1") {
-        Write-Host "Aviso: verificação de atestado ignorada (AGENTCLIP_SKIP_ATTESTATION=1); apenas o SHA-256 foi conferido." -ForegroundColor Yellow
+        Write-Host (Get-AgentClipMessage "skip_warning") -ForegroundColor Yellow
         return $true
     }
     if ((Compare-AgentClipVersion -Candidate $Version -Installed $attestationMinVersion) -lt 0) {
-        Write-Host "Aviso: $Version é anterior aos atestados de build; apenas o SHA-256 foi conferido." -ForegroundColor Yellow
+        Write-Host (Get-AgentClipMessage "old_release_warning" @($Version)) -ForegroundColor Yellow
         return $true
     }
     $result = Test-AgentClipWithGh -Archive $Archive -BaseUrl $BaseUrl -Repository $Repository -Version $Version
     if ($result -eq 0) {
-        Write-Host "Autenticidade confirmada por gh attestation verify."
+        Write-Host (Get-AgentClipMessage "authentic_gh")
         return $true
     }
     if ($result -eq 1) {
@@ -188,8 +218,8 @@ function Confirm-AgentClipAuthenticity {
     }
     $result = Test-AgentClipWithApi -Asset $Asset -Digest $Digest -Repository $Repository -Version $Version
     if ($result -eq 0) {
-        Write-Host "Autenticidade confirmada pela API de atestados do GitHub."
-        Write-Host "Para a verificação criptográfica completa, instale o gh e use gh attestation verify."
+        Write-Host (Get-AgentClipMessage "authentic_api")
+        Write-Host (Get-AgentClipMessage "full_verification_hint")
         return $true
     }
     if ($result -eq 2) {
@@ -206,19 +236,19 @@ if ($env:OS -ne "Windows_NT") {
 }
 
 if ([string]::IsNullOrWhiteSpace($Version) -or $Version -eq "latest") {
-    Write-Host "Buscando a versão mais recente do AgentClip..."
+    Write-Host (Get-AgentClipMessage "looking_up_latest")
     $release = Invoke-RestMethod -Headers @{ "User-Agent" = "agentclip-installer" } -Uri "https://api.github.com/repos/$repository/releases/latest"
     $Version = $release.tag_name
 }
 else {
-    Write-Host "Versão solicitada: $Version"
+    Write-Host (Get-AgentClipMessage "requested_version" @($Version))
 }
 
 if ($Version -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
     throw "Could not resolve a semantic release tag (got '$Version')."
 }
 
-Write-Host "Versão encontrada: $Version"
+Write-Host (Get-AgentClipMessage "found_version" @($Version))
 $installedBinary = Join-Path $InstallDir "agentclip.exe"
 $installedVersion = $null
 if (Test-Path -Path $installedBinary -PathType Leaf) {
@@ -234,20 +264,20 @@ if (Test-Path -Path $installedBinary -PathType Leaf) {
 }
 
 if ($installedVersion) {
-    Write-Host "Versão instalada encontrada: $installedVersion"
+    Write-Host (Get-AgentClipMessage "installed_version" @($installedVersion))
     $comparison = Compare-AgentClipVersion -Candidate $Version -Installed $installedVersion
     if ($comparison -eq 0) {
-        Write-Host "AgentClip $installedVersion já está atualizado. Nenhum download necessário."
+        Write-Host (Get-AgentClipMessage "up_to_date" @($installedVersion))
         exit 0
     }
     if ($comparison -lt 0) {
-        Write-Host "A versão instalada ($installedVersion) é mais nova que $Version. Nenhuma alteração realizada."
+        Write-Host (Get-AgentClipMessage "installed_is_newer" @($installedVersion, $Version))
         exit 0
     }
-    Write-Host "Nova versão disponível: $Version (atual: $installedVersion)."
+    Write-Host (Get-AgentClipMessage "update_available" @($Version, $installedVersion))
 }
 else {
-    Write-Host "Nenhuma instalação válida foi encontrada em $installedBinary."
+    Write-Host (Get-AgentClipMessage "no_valid_install" @($installedBinary))
 }
 
 $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -264,7 +294,7 @@ try {
     New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
     $archive = Join-Path $temporaryDirectory $asset
     $checksums = Join-Path $temporaryDirectory "checksums.txt"
-    Write-Host "Baixando AgentClip $Version para windows/$architecture..."
+    Write-Host (Get-AgentClipMessage "downloading" @($Version, $architecture))
     Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/$asset" -OutFile $archive
     Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/checksums.txt" -OutFile $checksums
 
@@ -291,12 +321,12 @@ try {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Copy-Item -Force -Path $binary -Destination (Join-Path $InstallDir "agentclip.exe")
     if ($installedVersion) {
-        Write-Host "AgentClip atualizado: $installedVersion → $Version."
+        Write-Host (Get-AgentClipMessage "updated" @($installedVersion, $Version))
     }
     else {
-        Write-Host "AgentClip instalado: $Version."
+        Write-Host (Get-AgentClipMessage "installed" @($Version))
     }
-    Write-Host "Binário disponível em $(Join-Path $InstallDir 'agentclip.exe')"
+    Write-Host (Get-AgentClipMessage "binary_at" @((Join-Path $InstallDir 'agentclip.exe')))
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if (($userPath -split ';') -notcontains $InstallDir) {

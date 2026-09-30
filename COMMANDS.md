@@ -163,23 +163,30 @@ bloqueado pelo sistema.
 token de visualização. Ela não é publicada na rede: o servidor HTTP escuta em
 `127.0.0.1`. Não compartilhe essa URL.
 
+A página aparece em inglês por padrão. Para vê-la em português, abra o endereço
+com `?lang=pt-BR`, deixe o navegador preferir `pt-BR` ou inicie o Companion com
+`AGENTCLIP_LANG=pt-BR` (veja [Idioma](#idioma)). Os nomes dos botões abaixo estão
+como aparecem em português; o original em inglês vem entre parênteses na
+primeira menção.
+
 A página atualiza a cada dois segundos e mostra:
 
 - perfil e destino SSH;
-- estado do túnel (`Conectado` ou `Desconectado`) e o último erro, quando há;
+- estado do túnel (`Conectado` ou `Desconectado`; em inglês, `Connected` ou
+  `Disconnected`) e o último erro, quando há;
 - clipboard armado, quantidade, nomes/tipos dos itens e horário de expiração;
 - aviso de release estável nova, com a versão e `agentclip upgrade`;
-- botão **Parar Companion**, equivalente ao comando `companion stop`.
+- botão **Parar Companion** (*Stop Companion*), equivalente ao comando `companion stop`.
 
 Ela é uma visão operacional; não transfere o conteúdo do clipboard ao
 servidor. A transferência acontece apenas quando o harness remoto chama uma
 ferramenta MCP após um pedido explícito do usuário.
 
 Quando um agente remoto oferece um arquivo para o host, esta página mostra a
-seção **Arquivos do servidor**. As ofertas pendentes e os arquivos já recebidos
+seção **Arquivos recebidos** (*Received files*). As ofertas pendentes e os arquivos já recebidos
 são exibidos separadamente, cada grupo ordenado do mais recente para o menos
 recente. A oferta mostra data e hora de recebimento, tamanho e expiração; use
-**Aceitar** para liberar a entrega ou **Recusar** para cancelá-la. Ao
+**Aceitar** (*Accept*) para liberar a entrega ou **Recusar** (*Reject*) para cancelá-la. Ao
 aceitar ou recusar, a oferta sai imediatamente da lista e a chamada MCP remota
 que a criou recebe a decisão (ela espera por até 10 minutos). O remoto não
 consegue enviar bytes nem escolher o destino local antes desse aceite. Um
@@ -187,13 +194,13 @@ recebimento validado fica em `~/.cache/agentclip/received/` (ou cache
 equivalente) e é removido automaticamente após 30 minutos. Os recebidos exibem
 também a data e hora em que a transferência foi concluída.
 
-Arquivos recebidos de texto, código e dados tabulares exibem **Abrir conteúdo**
-e **Copiar conteúdo**. Abrir conteúdo mostra o texto bruto numa nova aba local;
+Arquivos recebidos de texto, código e dados tabulares exibem **Abrir conteúdo** (*Open content*)
+e **Copiar conteúdo** (*Copy content*). Abrir conteúdo mostra o texto bruto numa nova aba local;
 Copiar conteúdo copia esse texto para a área de transferência. As ações servem
 para CSV, TSV, SQL, JSON, YAML e fontes, não executam HTML e não são exibidas
 para formatos binários, como imagens e planilhas `.xlsx`. Todos os arquivos
-recebidos exibem ainda **Baixar**, que baixa o original pelo endereço privado
-local, e **Copiar caminho**, para copiar sua localização na inbox do AgentClip.
+recebidos exibem ainda **Baixar** (*Download*), que baixa o original pelo endereço privado
+local, e **Copiar caminho** (*Copy path*), para copiar sua localização na inbox do AgentClip.
 
 ### `doctor`
 
@@ -229,6 +236,20 @@ horas, compartilhando um cache privado entre perfis. O status também está na
 ferramenta MCP `agentclip_update_status`; ela nunca exige que o clipboard esteja
 armado e recomenda `agentclip upgrade` quando necessário.
 
+### `help`
+
+```text
+agentclip help
+agentclip help <command>
+agentclip <command> --help
+```
+
+Sem argumentos, `agentclip` (ou `help`, `-h`, `--help`) lista todos os comandos
+agrupados, cada um com uma linha de resumo. `agentclip help <comando>` (ou
+`agentclip <comando> --help`) mostra a sintaxe e explica o comando e suas
+opções, incluindo os aliases. Pedir ajuda nunca executa o comando. Um comando
+desconhecido diz isso, aponta para `help` e sai com o código 2.
+
 ### `version`
 
 ```text
@@ -239,6 +260,25 @@ agentclip -v
 
 Exibe a versão do binário. Os instaladores usam esse comando para decidir se
 uma atualização é necessária.
+
+## Idioma
+
+A saída da linha de comando, o `help`, as mensagens dos instaladores e a página
+web do Companion estão em inglês (en-US) por padrão, e existe um catálogo em
+português do Brasil (pt-BR). A escolha:
+
+- **CLI e instaladores** (`install.sh`, `install.ps1`): a variável
+  `AGENTCLIP_LANG`, por exemplo `AGENTCLIP_LANG=pt-BR agentclip help`. Aceita
+  `pt`, `pt-BR`, `pt_BR.UTF-8` e variantes; qualquer outro valor, ou nenhum, é
+  inglês. O idioma do sistema **não** é consultado, então o mesmo comando imprime
+  as mesmas palavras em qualquer máquina, a menos que você peça outro idioma.
+- **Página do Companion**: `?lang=pt-BR` no endereço, depois o idioma que o
+  navegador prefere (`Accept-Language`), depois `AGENTCLIP_LANG` do processo do
+  Companion e, por fim, inglês.
+
+Traduzem-se o que a pessoa lê: o `help`, as mensagens de resultado e de estado, os
+avisos e a página. As mensagens de erro técnicas ficam em inglês de propósito, para
+poderem ser pesquisadas. O que faltar em um catálogo aparece em inglês.
 
 ## Fluxo avulso legado
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/wendellrocha/agentclip/internal/buildinfo"
 	"github.com/wendellrocha/agentclip/internal/companion"
+	"github.com/wendellrocha/agentclip/internal/i18n"
 )
 
 // Usage is the message shown when the arguments are missing.
@@ -149,7 +150,7 @@ func (r Runner) Run(options Options) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "Installing AgentClip %s on %s...\n", tag, options.Destination)
+		fmt.Fprintln(stdout, i18n.T("Installing AgentClip %s on %s...", tag, options.Destination))
 		if err := r.Install(options.Destination, identityFile, tag); err != nil {
 			return fmt.Errorf("install AgentClip on %s: %w", options.Destination, err)
 		}
@@ -166,12 +167,12 @@ func (r Runner) Run(options Options) error {
 		return err
 	}
 	if options.NoStart {
-		fmt.Fprintf(stdout, "Setup complete for %q. Start it with: agentclip companion start %s\n", profile.Name, profile.Name)
+		fmt.Fprintln(stdout, i18n.T("Setup complete for %q. Start it with: agentclip companion start %s", profile.Name, profile.Name))
 		return nil
 	}
 	if err := r.StartCompanion(profile.Name); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Setup complete for %q. SSH normally, then ask your agent to inspect the clipboard.\n", profile.Name)
+	fmt.Fprintln(stdout, i18n.T("Setup complete for %q. SSH normally, then ask your agent to inspect the clipboard.", profile.Name))
 	return nil
 }

@@ -140,7 +140,16 @@ Assert-That "  neither gh nor the API is consulted after the opt-out" (($script:
 
 $version = "v0.7.0"
 Invoke-Scenario "release before v0.7.1-rc.1 is accepted with a warning" $true { $script:apiMode = "404" }
-Assert-That "  the warning says it predates attestations" ($script:lastMessages -like "*anterior aos atestados*")
+Assert-That "  the warning says it predates attestations" ($script:lastMessages -like "*predates build attestations*")
+
+$env:AGENTCLIP_LANG = "pt-BR"
+Invoke-Scenario "the same install in Brazilian Portuguese" $true { $script:apiMode = "404" }
+Assert-That "  the warning is in Portuguese" ($script:lastMessages -like "*anterior aos atestados*")
+Assert-That "  and no English warning is left" (-not ($script:lastMessages -like "*predates build attestations*"))
+$env:AGENTCLIP_LANG = "fr"
+Invoke-Scenario "an unsupported language is English" $true { $script:apiMode = "404" }
+Assert-That "  the warning is English" ($script:lastMessages -like "*predates build attestations*")
+Remove-Item Env:AGENTCLIP_LANG
 
 Remove-Item -Recurse -Force $work
 Write-Output ""

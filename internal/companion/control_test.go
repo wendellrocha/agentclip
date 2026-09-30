@@ -2,12 +2,15 @@ package companion
 
 import (
 	"encoding/json"
+	"html"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wendellrocha/agentclip/internal/i18n"
 )
 
 type trackedReadCloser struct {
@@ -74,7 +77,7 @@ func TestControlServerServesPrivateStatusViewAndStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	markup = append(markup, script...)
-	for _, expected := range []string{"btn-accept", "btn-reject", "Abrir conteúdo", "Copiar conteúdo", "Baixar", "Copiar caminho", "Aguardando sua aprovação", "Recebido em", "Arquivos recebidos", "formatDateTime", "formatBytes", "Atualização", "agentclip upgrade"} {
+	for _, expected := range []string{"btn-accept", "btn-reject", "Open content", "Copy content", "Download", "Copy path", "Awaiting your approval", "Received at", "Received files", "formatDateTime", "formatBytes", "Update", "agentclip upgrade"} {
 		if !strings.Contains(string(markup), expected) {
 			t.Fatalf("dashboard markup missing %q", expected)
 		}
@@ -88,11 +91,11 @@ func TestControlServerServesPrivateStatusViewAndStop(t *testing.T) {
 		t.Fatal("dashboard file card renderer missing")
 	}
 	card := source[cardStart:cardEnd]
-	if strings.Contains(card, "Copiar conteúdo") || !strings.Contains(card, "o.previewable ? previewActions(o) : []") {
-		t.Fatal("Copiar conteúdo must be rendered only inside the previewable file branch")
+	if strings.Contains(card, "Copy content") || !strings.Contains(card, "o.previewable ? previewActions(o) : []") {
+		t.Fatal("Copy content must be rendered only inside the previewable file branch")
 	}
-	if !strings.Contains(source, "function previewActions(o)") || strings.Count(source, "Copiar conteúdo") != 1 {
-		t.Fatal("Copiar conteúdo must exist once, in previewActions")
+	if !strings.Contains(source, "function previewActions(o)") || strings.Count(source, "Copy content") != 1 {
+		t.Fatal("Copy content must exist once, in previewActions")
 	}
 	if err := StopRuntime(state); err != nil {
 		t.Fatal(err)
@@ -306,4 +309,138 @@ func TestControlServerDoesNotServeNonPreviewableInboundContent(t *testing.T) {
 	if !reader.closed {
 		t.Fatal("rejected non-previewable content reader was not closed")
 	}
+}
+
+func fetchPage(t *testing.T, url string, header map[string]string) (string, http.Header) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range header {
+		request.Header.Set(key, value)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body), response.Header
+}
+
+func pageMeta(t *testing.T, page, name string) string {
+	t.Helper()
+	match := regexp.MustCompile(`<meta name="` + name + `" content="([^"]*)">`).FindStringSubmatch(page)
+	if match == nil {
+		t.Fatalf("the page has no %s meta", name)
+	}
+	return html.UnescapeString(match[1])
+}
+
+// The page is English unless the person asks otherwise: with ?lang=, with what
+// their browser prefers, or with AGENTCLIP_LANG for the process. Every message in
+// the markup is filled in, and the script receives the translations it needs.
+func TestDashboardIsEnglishByDefaultAndPortugueseOnRequest(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	defer i18n.SetLanguage(i18n.English)
+	control, err := StartControl("dev", func() any { return map[string]any{} }, func() {}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	url := ViewURL(control.State)
+
+	english, headers := fetchPage(t, url, nil)
+	if !strings.Contains(english, `<html lang="en-US">`) || !strings.Contains(english, "Received files") || pageMeta(t, english, "agentclip-i18n") != "{}" {
+		t.Errorf("the default page is not plain English:\n%s", english)
+	}
+	if !strings.Contains(headers.Get("Vary"), "Accept-Language") {
+		t.Errorf("Vary = %q; the page changes with Accept-Language", headers.Get("Vary"))
+	}
+	if strings.Contains(english, "{{") {
+		t.Errorf("an unfilled placeholder is left in the page:\n%s", english)
+	}
+
+	for name, page := range map[string]struct {
+		url    string
+		header map[string]string
+	}{
+		"query":              {url + "?lang=pt-BR", nil},
+		"header":             {url, map[string]string{"Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"}},
+		"query beats header": {url + "?lang=pt", map[string]string{"Accept-Language": "en-US"}},
+	} {
+		portuguese, _ := fetchPage(t, page.url, page.header)
+		if !strings.Contains(portuguese, `<html lang="pt-BR">`) || !strings.Contains(portuguese, "Arquivos recebidos") || strings.Contains(portuguese, ">Received files<") {
+			t.Errorf("%s: the page is not in Portuguese:\n%s", name, portuguese)
+		}
+		if strings.Contains(portuguese, "{{") {
+			t.Errorf("%s: an unfilled placeholder is left in the page", name)
+		}
+		var catalog map[string]string
+		if err := json.Unmarshal([]byte(pageMeta(t, portuguese, "agentclip-i18n")), &catalog); err != nil || catalog["Open content"] != "Abrir conteúdo" {
+			t.Errorf("%s: the script's translations are %v (%v)", name, catalog, err)
+		}
+		if pageMeta(t, portuguese, "agentclip-lang") != "pt-BR" {
+			t.Errorf("%s: the script would format dates for the wrong language", name)
+		}
+	}
+
+	// A browser that asks for something else, or a bad ?lang=, gets the process language.
+	if page, _ := fetchPage(t, url+"?lang=klingon", map[string]string{"Accept-Language": "fr"}); !strings.Contains(page, `<html lang="en-US">`) {
+		t.Error("an unsupported language did not fall back to English")
+	}
+	i18n.SetLanguage(i18n.Portuguese)
+	if page, _ := fetchPage(t, url, map[string]string{"Accept-Language": "fr"}); !strings.Contains(page, `<html lang="pt-BR">`) {
+		t.Error("AGENTCLIP_LANG did not set the language of the page when the browser asks for none")
+	}
+}
+
+// Whatever is substituted into the page is escaped: a hostile language value must
+// not become markup, and the whole catalog, quotes and line breaks included, must
+// survive the trip through the attribute that carries it.
+func TestRenderDashboardEscapesEverythingItSubstitutes(t *testing.T) {
+	hostile := renderDashboard(`<p>{{t:Connecting}}</p><i lang="{{LANG}}">`, "/view/x", `pt-BR"><script>alert(1)</script>`)
+	if strings.Contains(hostile, "<script>") || !strings.Contains(hostile, "&lt;script&gt;") {
+		t.Errorf("a language value became markup: %s", hostile)
+	}
+
+	page := renderDashboard(`<meta name="agentclip-i18n" content="{{I18N}}">`, "/view/x", i18n.Portuguese)
+	var roundTrip map[string]string
+	if err := json.Unmarshal([]byte(pageMeta(t, page, "agentclip-i18n")), &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	want := scriptCatalog(i18n.Portuguese)
+	if len(want) < 30 || len(roundTrip) != len(want) {
+		t.Fatalf("the script receives %d translations, want the %d it asks for", len(roundTrip), len(want))
+	}
+	if _, help := roundTrip["Usage:"]; help {
+		t.Error("the page carries the translations of the command line")
+	}
+	// Every message the script asks for is translated.
+	for _, match := range scriptMessage.FindAllStringSubmatch(string(mustRead(t, "ui/assets/app.js")), -1) {
+		if want[match[1]] == "" {
+			t.Errorf("the script asks for %q, which has no translation", match[1])
+		}
+	}
+	for key, value := range want {
+		if roundTrip[key] != value {
+			t.Errorf("translation of %q changed on the way to the script: %q", key, roundTrip[key])
+		}
+	}
+	if strings.Contains(page, `content="{`) && strings.Contains(strings.SplitN(page, `content="`, 2)[1][:1], `"`) {
+		t.Error("the catalog attribute is empty")
+	}
+}
+
+func mustRead(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := dashboardFiles.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
