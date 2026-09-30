@@ -4,12 +4,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wendellrocha/agentclip/internal/testenv"
 )
 
 // fastTunnel makes the reconnection quick enough to watch in a test.
@@ -150,15 +153,25 @@ func TestTunnelReconnectsAfterExitsReportsEachStateAndStopsOnCancel(t *testing.T
 // The wait grows while the tunnel keeps failing quickly, is capped, and starts
 // over once a tunnel has stayed up: a healthy tunnel that drops after hours
 // must not inherit the wait earned by failures long before.
+//
+// The waits are read from the log, where the loop writes each one it chooses, so
+// the test does not depend on how long a process takes to start: that varies
+// from a few milliseconds on Linux to half a second on a busy Windows runner.
 func TestTunnelWaitGrowsToItsCapAndStartsOverAfterAStableTunnel(t *testing.T) {
-	fastTunnel(t, 50*time.Millisecond, 400*time.Millisecond, 300*time.Millisecond)
-	// Fails 5 times at once, then stays up for 0.8s (past the stable threshold),
-	// drops once, and stays up again.
-	ssh := fakeSSH(t, 5, 6, 800*time.Millisecond)
+	testenv.IsolateUserDirs(t)
+	// A start that fails at once takes far less than "stable"; the sixth one
+	// stays up for longer than it, then drops.
+	fastTunnel(t, 50*time.Millisecond, 400*time.Millisecond, 2*time.Second)
+	ssh := fakeSSH(t, 5, 6, 2500*time.Millisecond)
+	logger, err := NewLogger("waits")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		_ = RunTunnel(ctx, profileForTunnel(), 45678)
+		_ = RunTunnelWithLogger(ctx, profileForTunnel(), 45678, nil, logger)
 		close(done)
 	}()
 	// Registered after fastTunnel, so it runs first: the loop and its child are
@@ -167,21 +180,20 @@ func TestTunnelWaitGrowsToItsCapAndStartsOverAfterAStableTunnel(t *testing.T) {
 		cancel()
 		<-done
 	})
-	waitFor(t, "seven starts", func() bool { return len(ssh.stamps()) >= 7 })
-	times := ssh.stamps()
-	gap := func(i int) time.Duration { return times[i+1].Sub(times[i]) }
-	// Waits after quick exits: 50, 100, 200, 400 (the cap). The gaps also hold
-	// the process start-up, so only lower bounds and the cap are checked.
-	if gap(1) < 90*time.Millisecond || gap(2) < 190*time.Millisecond || gap(3) < 390*time.Millisecond {
-		t.Errorf("the wait did not grow: gaps %v %v %v %v", gap(0), gap(1), gap(2), gap(3))
+	waitFor(t, "the seventh start", func() bool { return len(ssh.stamps()) >= 7 })
+
+	data, err := os.ReadFile(logger.Path())
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The fifth wait would be 800ms if it kept doubling; the cap holds it at 400ms.
-	if gap(4) < 390*time.Millisecond || gap(4) > 700*time.Millisecond {
-		t.Errorf("the wait after the cap was reached is %v, want it held near 400ms", gap(4))
+	var waits []string
+	for _, match := range regexp.MustCompile(`SSH tunnel reconnecting in (\S+)`).FindAllStringSubmatch(string(data), -1) {
+		waits = append(waits, match[1])
 	}
-	// The sixth run stayed up 0.8s, past the 300ms threshold, so the next wait
-	// starts over at 50ms instead of the 400ms cap it had reached.
-	if wait := gap(5) - 800*time.Millisecond; wait > 250*time.Millisecond {
-		t.Errorf("after a stable tunnel the wait was %v, want it to start over near 50ms, not stay at the cap", wait)
+	// After five quick exits: 50ms, then doubling, then held at the 400ms cap.
+	// After the tunnel that stayed up, it starts over at 50ms instead of 400ms.
+	want := []string{"50ms", "100ms", "200ms", "400ms", "400ms", "50ms"}
+	if strings.Join(waits, " ") != strings.Join(want, " ") {
+		t.Errorf("waits = %v, want %v", waits, want)
 	}
 }
